@@ -207,6 +207,17 @@ fn blast_scale(shape: Shape) -> f32 {
     (area / STANDARD_AREA).sqrt().clamp(0.5, 3.0)
 }
 
+/// How much harder a hit lands on this piece than its change in speed says.
+/// A big TNT crate is heavy, so a knock barely moves it; scaling the knock
+/// by the crate's size keeps it as easy to set off as a standard one.
+fn jolt_scale(e: &Ent) -> f32 {
+    if e.kind == Kind::Block(Material::Tnt) {
+        blast_scale(e.shape).max(1.0)
+    } else {
+        1.0
+    }
+}
+
 pub struct Ent {
     pub handle: RigidBodyHandle,
     col: ColliderHandle,
@@ -955,8 +966,8 @@ impl Game {
                 if Some(i) == flying && dv > 3.0 {
                     pig_impact = true;
                 }
-            } else if damage_on && dv > DV_THRESHOLD {
-                let dmg = dv - DV_THRESHOLD;
+            } else if damage_on && dv * jolt_scale(e) > DV_THRESHOLD {
+                let dmg = dv * jolt_scale(e) - DV_THRESHOLD;
                 e.hp -= dmg;
                 e.hurt_flash = 1.0;
                 if dmg > 2.0 {
@@ -1280,6 +1291,49 @@ mod tests {
         assert!((blast_scale(crate_of(0.8)) - 1.0).abs() < 1e-5);
         assert!((blast_scale(crate_of(1.6)) - 2.0).abs() < 1e-5);
         assert!(blast_scale(crate_of(0.4)) < 1.0);
+    }
+
+    /// Throws a pig at a TNT crate of this size; did it go off?
+    fn tnt_goes_off(side: f32, speed: f32) -> bool {
+        let tnt = Piece {
+            kind: PieceKind::Block(Material::Tnt),
+            x: 25.0,
+            y: side / 2.0,
+            angle: 0.0,
+            size: Size::Box { w: side, h: side },
+        };
+        let wolf = Piece {
+            kind: PieceKind::Wolf(WolfKind::Wolf),
+            x: 45.0,
+            y: 0.5,
+            angle: 0.0,
+            size: Size::Ball { r: 0.5 },
+        };
+        let lvl = Level {
+            pieces: vec![tnt, wolf],
+            pigs: vec![PigKind::Grunt],
+            ..Level::default()
+        };
+        let mut g = Game::new(&lvl);
+        run(&mut g, 90);
+        let idx = g.spawn_pig(PigKind::Grunt, V2::new(22.0, 0.4), V2::new(speed, 0.0));
+        g.phase = Phase::Flying {
+            ent: idx,
+            t: 0.0,
+            slow_t: 0.0,
+            used: false,
+            impact_t: None,
+        };
+        run(&mut g, 90);
+        !g.ents[0].alive
+    }
+
+    #[test]
+    fn big_tnt_is_as_touchy_as_small_tnt() {
+        for side in [0.8, 1.6, 2.4] {
+            assert!(!tnt_goes_off(side, 6.0), "a {side} m crate is too touchy");
+            assert!(tnt_goes_off(side, 8.0), "a {side} m crate is too tough");
+        }
     }
 
     #[test]
