@@ -1274,10 +1274,12 @@ impl App {
         let border = Color::new(0.55, 0.35, 0.2, a);
         draw_rectangle_lines(panel.x, panel.y, panel.w, panel.h, u * 0.012, border);
 
-        let (title, color) = if won {
-            ("Wolves routed!", rgb(90, 160, 70))
-        } else {
-            ("The wolves are laughing...", rgb(200, 80, 70))
+        let turkeys = holiday::thanksgiving();
+        let (title, color) = match (won, turkeys) {
+            (true, false) => ("Wolves routed!", rgb(90, 160, 70)),
+            (true, true) => ("Turkeys routed!", rgb(90, 160, 70)),
+            (false, false) => ("The wolves are laughing...", rgb(200, 80, 70)),
+            (false, true) => ("The turkeys are gobbling...", rgb(200, 80, 70)),
         };
         render::text_centered(title, sw / 2.0, panel.y + ph * 0.17, u * 0.07, color);
         if won {

@@ -67,7 +67,11 @@ fn counts(level: &Level) -> String {
     };
     format!(
         "{wolves} {}  -  {pigs} {}",
-        plural(wolves, "wolf", "wolves"),
+        if crate::holiday::thanksgiving() {
+            plural(wolves, "turkey", "turkeys")
+        } else {
+            plural(wolves, "wolf", "wolves")
+        },
         plural(pigs, "pig", "pigs")
     )
 }
