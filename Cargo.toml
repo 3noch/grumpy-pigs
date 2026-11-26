@@ -1,0 +1,33 @@
+[package]
+name = "grumpy-pigs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+macroquad = "0.4.16"
+rapier2d = "0.36.1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+
+# Small web download: `cargo build --profile web --target wasm32-unknown-unknown`
+[profile.web]
+inherits = "release"
+opt-level = "s"
+strip = true
+
+# Android packaging via `cargo quad-apk` (see README).
+[package.metadata.android]
+assets = "assets"
+fullscreen = true
+build_targets = ["aarch64-linux-android", "armv7-linux-androideabi"]
+
+[package.metadata.android.activity_attributes]
+"android:screenOrientation" = "userLandscape"
+
+# Keep physics fast in debug builds.
+[profile.dev.package."*"]
+opt-level = 2
