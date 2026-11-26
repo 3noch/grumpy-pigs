@@ -39,6 +39,15 @@ struct Particle {
     gravity: bool,
 }
 
+/// A startled fairy zooming off the screen (she's left the physics world).
+struct Fleeing {
+    pos: V2,
+    vel: V2,
+    radius: f32,
+    seed: u32,
+    t: f32,
+}
+
 struct Popup {
     pos: Vec2,
     text: String,
@@ -73,6 +82,7 @@ struct App {
     best_stars: Vec<u8>,
     screen: Screen,
     particles: Vec<Particle>,
+    fleeing: Vec<Fleeing>,
     popups: Vec<Popup>,
     shake: f32,
     /// Wolves mock a missed shot for a moment.
@@ -533,6 +543,7 @@ impl App {
             levels,
             screen: Screen::Menu,
             particles: Vec::new(),
+            fleeing: Vec::new(),
             popups: Vec::new(),
             shake: 0.0,
             laugh: 0.0,
@@ -694,6 +705,7 @@ impl App {
 
     fn begin(&mut self, src: Source, level: Level) {
         self.particles.clear();
+        self.fleeing.clear();
         self.popups.clear();
         self.aim_start = None;
         self.screen = Screen::Play {
@@ -870,6 +882,33 @@ impl App {
         });
     }
 
+    /// A startled fairy darts off, shedding sparkles.
+    fn flee_effect(&mut self, pos: V2, radius: f32, seed: u32, dir: V2) {
+        // Off she goes: up and away from whatever hit her.
+        let dart = if dir.x.abs() > 0.2 {
+            dir.x.signum()
+        } else {
+            1.0
+        };
+        self.fleeing.push(Fleeing {
+            pos,
+            vel: V2::new(dart * 3.0, 4.0),
+            radius,
+            seed,
+            t: 0.0,
+        });
+        for _ in 0..16 {
+            let vel = vec2(rand::gen_range(-3.0, 3.0), rand::gen_range(-1.0, 3.0));
+            let color = if rand::gen_range(0, 2) == 0 {
+                gfx::rgb(255, 246, 180)
+            } else {
+                gfx::rgb(220, 190, 255)
+            };
+            let size = rand::gen_range(0.05, 0.13);
+            self.spawn(pos, vel, rand::gen_range(0.5, 1.0), size, color, false);
+        }
+    }
+
     /// Turns simulation events into particles, popups, shake and taunts.
     fn apply_events(&mut self, game: &mut Game) {
         let wolves_alive = game.wolves_alive();
@@ -940,6 +979,12 @@ impl App {
                     });
                     self.shake = self.shake.max(0.6);
                 }
+                Event::Flee {
+                    pos,
+                    radius,
+                    seed,
+                    dir,
+                } => self.flee_effect(pos, radius, seed, dir),
                 Event::Poof { pos } => {
                     if wolves_alive > 0 {
                         self.laugh = 2.0;
@@ -1015,6 +1060,10 @@ impl App {
             }
             match e.kind {
                 Kind::Block(_) | Kind::Rock => render::block(view, e),
+                Kind::Fairy => {
+                    anim.look = pig_pos.unwrap_or(game.pouch()) - e.pos;
+                    art::fairy(view, e.pos, e.radius(), &anim, false);
+                }
                 Kind::Wolf(wolf_kind) => {
                     let sim::Shape::Ball { r } = e.shape else {
                         continue;
@@ -1085,6 +1134,24 @@ impl App {
     }
 
     fn draw_effects(&mut self, view: &View, dt: f32) {
+        let time = self.time;
+        let mut trail = Vec::new();
+        self.fleeing.retain_mut(|f| {
+            f.t += dt;
+            f.vel.y += 9.0 * dt;
+            f.vel.x += (f.t * 7.0).sin() * 10.0 * dt;
+            f.pos += f.vel * dt;
+            let anim = Anim::new(time, f.seed, Mood::Worried, f.vel);
+            art::fairy(view, f.pos, f.radius, &anim, true);
+            if rand::gen_range(0.0, 1.0) < 0.5 {
+                trail.push(f.pos);
+            }
+            f.t < 3.0
+        });
+        for pos in trail {
+            let vel = vec2(rand::gen_range(-0.5, 0.5), rand::gen_range(-1.0, 0.0));
+            self.spawn(pos, vel, 0.6, 0.07, gfx::rgb(255, 246, 180), false);
+        }
         self.particles.retain_mut(|p| {
             p.life -= dt;
             if p.gravity {

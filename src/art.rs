@@ -913,3 +913,185 @@ pub fn wolf(
         _ => {}
     }
 }
+
+/// A tiny four-pointed twinkle.
+fn twinkle(rig: &Rig, x: f32, y: f32, size: f32, col: Color) {
+    rig.ellipse(x, y, size, size * 0.22, 0.0, col);
+    rig.ellipse(x, y, size * 0.22, size, 0.0, col);
+}
+
+/// A little fairy, arms raised to hold up whatever rests on her. `r` is her
+/// collider's radius. `startled` is set while she flees.
+#[allow(clippy::too_many_lines)]
+pub fn fairy(view: &View, pos: V2, r: f32, a: &Anim, startled: bool) {
+    let t = a.t + hash(a.seed, 9) * 10.0;
+    let rig = Rig::new(*view, pos, 0.0, r);
+    let line = rgb(92, 52, 120);
+    let skin = rgb(255, 222, 200);
+    let hair = rgb(255, 196, 84);
+    let ow = 0.05;
+
+    // Soft glow.
+    let glow: Vec<P> = (0..32)
+        .map(|i| {
+            let th = i as f32 / 32.0 * TAU;
+            (th.cos() * 1.35, th.sin() * 1.35)
+        })
+        .collect();
+    let pulse = 0.28 + 0.08 * (t * 3.0).sin();
+    rig.fan(
+        (0.0, 0.1),
+        &glow,
+        rgba(255, 250, 210, pulse),
+        rgba(255, 250, 210, 0.0),
+    );
+
+    // Wings: a fast shimmering flutter.
+    let speed = if startled { 46.0 } else { 26.0 };
+    let flap = 0.55 + 0.45 * (t * speed).sin().abs();
+    let wing = rgba(205, 238, 255, 0.6);
+    let edge = rgba(120, 172, 226, 0.9);
+    for sx in [-1.0f32, 1.0] {
+        let (rx, ry) = (0.6 * flap, 0.36);
+        rig.blob(
+            sx * (0.12 + rx * 0.9),
+            0.28,
+            rx,
+            ry,
+            sx * 0.5,
+            rgba(255, 255, 255, 0.75),
+            wing,
+            Some((edge, 0.035)),
+        );
+        let (rx, ry) = (0.42 * flap, 0.24);
+        rig.blob(
+            sx * (0.1 + rx * 0.9),
+            -0.22,
+            rx,
+            ry,
+            -sx * 0.45,
+            rgba(255, 255, 255, 0.75),
+            wing,
+            Some((edge, 0.035)),
+        );
+    }
+
+    // Arms: raised overhead to hold things up; flung wide when startled.
+    for sx in [-1.0f32, 1.0] {
+        let pts = if startled {
+            bez((sx * 0.18, 0.02), (sx * 0.5, 0.15), (sx * 0.72, 0.42), 6)
+        } else {
+            bez((sx * 0.18, 0.02), (sx * 0.5, 0.45), (sx * 0.34, 0.88), 6)
+        };
+        rig.stroke(&pts, 0.17, line);
+        rig.stroke(&pts, 0.09, skin);
+        let (hx, hy) = pts[pts.len() - 1];
+        rig.blob(
+            hx,
+            hy,
+            0.085,
+            0.085,
+            0.0,
+            rgb(255, 238, 224),
+            skin,
+            Some((line, 0.035)),
+        );
+    }
+
+    // Legs, dangling and kicking a little.
+    for sx in [-1.0f32, 1.0] {
+        let kick = (t * 5.0 + sx * 1.3).sin() * 0.05;
+        let pts = [(sx * 0.12, -0.6), (sx * 0.14 + kick, -0.9)];
+        rig.stroke(&pts, 0.12, line);
+        rig.stroke(&pts, 0.06, skin);
+    }
+
+    // Petal dress.
+    let dress = rgb(200, 146, 234);
+    let dress_light = rgb(236, 206, 255);
+    let mut hem: Vec<P> = vec![(-0.17, 0.06)];
+    for i in 0..=8 {
+        let u = i as f32 / 8.0;
+        let x = -0.5 + u;
+        let dip = if i % 2 == 0 { -0.72 } else { -0.62 };
+        hem.push((x, dip + 0.02 * (t * 4.0 + u * 6.0).sin()));
+    }
+    hem.push((0.17, 0.06));
+    rig.poly(&hem, dress, Some((line, ow)));
+    rig.ellipse(-0.08, -0.25, 0.1, 0.25, 0.2, alpha(dress_light, 0.5));
+
+    // Head with a golden bun.
+    rig.blob(
+        0.0,
+        0.62,
+        0.14,
+        0.13,
+        0.0,
+        rgb(255, 226, 140),
+        hair,
+        Some((line, ow)),
+    );
+    rig.blob(
+        0.0,
+        0.33,
+        0.34,
+        0.31,
+        0.0,
+        rgb(255, 226, 140),
+        hair,
+        Some((line, ow)),
+    );
+    rig.blob(0.0, 0.29, 0.27, 0.26, 0.0, rgb(255, 240, 228), skin, None);
+    // Fringe.
+    rig.poly(
+        &[
+            (-0.28, 0.42),
+            (-0.1, 0.5),
+            (0.1, 0.5),
+            (0.28, 0.42),
+            (0.0, 0.6),
+        ],
+        hair,
+        None,
+    );
+
+    // Face.
+    let look = gaze(&rig, a.look, 0.04);
+    if startled {
+        for sx in [-1.0f32, 1.0] {
+            rig.circle(sx * 0.1, 0.3, 0.065, WHITE);
+            rig.circle(sx * 0.1 + look.0, 0.3 + look.1, 0.035, line);
+        }
+        rig.ellipse(0.0, 0.16, 0.04, 0.05, 0.0, line);
+    } else {
+        let shut = blink(a.t, a.seed);
+        for sx in [-1.0f32, 1.0] {
+            rig.ellipse(
+                sx * 0.1 + look.0,
+                0.3 + look.1,
+                0.035,
+                0.05 * (1.0 - shut).max(0.15),
+                0.0,
+                line,
+            );
+        }
+        let smile = bez((-0.07, 0.19), (0.0, 0.14), (0.07, 0.19), 5);
+        rig.stroke(&smile, 0.03, line);
+    }
+    for sx in [-1.0f32, 1.0] {
+        rig.circle(sx * 0.17, 0.22, 0.05, rgba(255, 130, 160, 0.45));
+    }
+
+    // Twinkles circling her.
+    for i in 0..3 {
+        let th = t * 1.4 + i as f32 * TAU / 3.0;
+        let tw = 0.5 + 0.5 * (t * 6.0 + i as f32 * 2.0).sin();
+        twinkle(
+            &rig,
+            th.cos() * 1.1,
+            0.1 + th.sin() * 0.8,
+            0.08 + 0.08 * tw,
+            rgba(255, 250, 200, 0.5 + 0.5 * tw),
+        );
+    }
+}

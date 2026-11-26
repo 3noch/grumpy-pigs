@@ -18,6 +18,10 @@ const GRACE: f32 = 1.2;
 const DV_THRESHOLD: f32 = 2.0;
 /// Wolves knocked out within this many seconds of each other form a combo.
 const COMBO_WINDOW: f32 = 1.5;
+/// Size of a fairy (her collider's radius).
+pub const FAIRY_RADIUS: f32 = 0.6;
+/// Anything touching a fairy faster than this (m/s) startles her away.
+const FAIRY_STARTLE: f32 = 2.5;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Material {
@@ -172,6 +176,9 @@ pub enum Kind {
     Pig(PigKind),
     /// Immovable terrain.
     Rock,
+    /// Hovers in place holding up whatever rests on her, until something
+    /// hits her and she flies off.
+    Fairy,
 }
 
 impl Kind {
@@ -289,6 +296,14 @@ pub enum Event {
     Poof {
         pos: V2,
     },
+    /// A fairy got startled and flew away.
+    Flee {
+        pos: V2,
+        radius: f32,
+        seed: u32,
+        /// Which way she darts off (away from what hit her).
+        dir: V2,
+    },
 }
 
 /// The visual setting a level takes place in. Only one exists so far.
@@ -308,6 +323,8 @@ pub enum PieceKind {
     /// A round stone that rolls.
     Boulder,
     Wolf(WolfKind),
+    /// A little winged helper who holds things up in mid-air.
+    Fairy,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -461,8 +478,8 @@ impl Game {
         // Keep sizes physically sane; shared levels can contain anything.
         const MIN: f32 = 0.01;
         let size = match (p.kind, p.size) {
-            // Wolves are always round.
-            (PieceKind::Wolf(_), s) => Size::Ball {
+            // Wolves and fairies are always round.
+            (PieceKind::Wolf(_) | PieceKind::Fairy, s) => Size::Ball {
                 r: s.radius().max(MIN),
             },
             (_, Size::Box { w, h }) => Size::Box {
@@ -476,6 +493,8 @@ impl Game {
             PieceKind::Boulder => RigidBodyBuilder::dynamic().angular_damping(0.1),
             PieceKind::Wolf(_) => RigidBodyBuilder::dynamic().angular_damping(1.0),
             PieceKind::Block(_) => RigidBodyBuilder::dynamic(),
+            // Nothing can push her down: she holds whatever lands on her.
+            PieceKind::Fairy => RigidBodyBuilder::kinematic_position_based(),
         }
         .translation(V2::new(p.x, p.y))
         .rotation(p.angle);
@@ -512,6 +531,7 @@ impl Game {
                 let col = col.density(1.0).friction(0.8).restitution(0.1);
                 (col, Kind::Wolf(w), w.hp())
             }
+            PieceKind::Fairy => (col.friction(0.9), Kind::Fairy, f32::INFINITY),
         };
         let (h, c) = self.world.insert(body, col);
         self.push(h, c, kind, shape, hp);
@@ -719,6 +739,10 @@ impl Game {
             }
             let falloff = 1.0 - dist / radius;
             let dir = if dist > 0.01 { d / dist } else { V2::Y };
+            if e.kind == Kind::Fairy {
+                self.flee(i, dir);
+                continue;
+            }
             let body = &mut self.world.bodies[e.handle];
             let impulse = dir * body.mass() * 22.0 * falloff * power;
             body.apply_impulse(impulse, true);
@@ -772,6 +796,77 @@ impl Game {
         }
     }
 
+    /// A fairy flies away, letting go of whatever she was holding.
+    fn flee(&mut self, i: usize, dir: V2) {
+        let e = &mut self.ents[i];
+        if !e.alive {
+            return;
+        }
+        e.alive = false;
+        let (pos, radius, seed, col) = (e.pos, e.radius(), e.seed, e.col);
+        // Wake whatever rests on her so it starts to fall.
+        let resting: Vec<ColliderHandle> = self
+            .world
+            .contact_pairs_with(col)
+            .map(|p| {
+                if p.collider1 == col {
+                    p.collider2
+                } else {
+                    p.collider1
+                }
+            })
+            .collect();
+        for c in resting {
+            if let Some(b) = self.world.colliders.get(c).and_then(Collider::parent) {
+                self.world.bodies[b].wake_up(true);
+            }
+        }
+        self.world.remove_body(self.ents[i].handle);
+        self.events.push(Event::Flee {
+            pos,
+            radius,
+            seed,
+            dir,
+        });
+    }
+
+    /// Fairies flee when a pig touches them or anything hits them hard.
+    fn startle_fairies(&mut self) {
+        for i in 0..self.ents.len() {
+            if !self.ents[i].alive || self.ents[i].kind != Kind::Fairy {
+                continue;
+            }
+            let (col, pos) = (self.ents[i].col, self.ents[i].pos);
+            let mut hit = None;
+            for pair in self.world.contact_pairs_with(col) {
+                if !pair.has_any_active_contact() {
+                    continue;
+                }
+                let other = if pair.collider1 == col {
+                    pair.collider2
+                } else {
+                    pair.collider1
+                };
+                let Some(body) = self.world.colliders.get(other).and_then(Collider::parent) else {
+                    continue;
+                };
+                let b = &self.world.bodies[body];
+                let is_pig = self
+                    .ents
+                    .iter()
+                    .any(|e| e.alive && e.handle == body && e.kind.is_pig());
+                if is_pig || b.linvel().length() > FAIRY_STARTLE {
+                    hit = Some(b.translation());
+                    break;
+                }
+            }
+            if let Some(from) = hit {
+                let away = (pos - from).normalize_or(V2::Y);
+                self.flee(i, away);
+            }
+        }
+    }
+
     /// Advance the simulation by a frame's worth of real time.
     pub fn update(&mut self, frame_dt: f32) {
         self.acc += frame_dt.min(0.1);
@@ -818,10 +913,13 @@ impl Game {
             _ => None,
         };
         let mut pig_impact = false;
+        if damage_on {
+            self.startle_fairies();
+        }
 
         for i in 0..self.ents.len() {
             let e = &mut self.ents[i];
-            if !e.alive || e.kind == Kind::Rock {
+            if !e.alive || matches!(e.kind, Kind::Rock | Kind::Fairy) {
                 continue;
             }
             let body = &self.world.bodies[e.handle];
@@ -859,7 +957,7 @@ impl Game {
         // Remove destroyed / out-of-bounds entities.
         for i in 0..self.ents.len() {
             let e = &self.ents[i];
-            if !e.alive || e.kind == Kind::Rock {
+            if !e.alive || matches!(e.kind, Kind::Rock | Kind::Fairy) {
                 continue;
             }
             let oob = e.pos.y < -4.0 || e.pos.x < -8.0 || e.pos.x > 60.0;
@@ -1099,6 +1197,65 @@ mod tests {
             }
             assert!(won, "bot could not beat '{}'", lvl.name);
         }
+    }
+
+    fn fairy_level() -> Level {
+        let fairy = Piece {
+            kind: PieceKind::Fairy,
+            x: 25.0,
+            y: 3.0,
+            angle: 0.0,
+            size: Size::Ball { r: FAIRY_RADIUS },
+        };
+        let crate_ = Piece {
+            kind: PieceKind::Block(Material::Wood),
+            x: 25.0,
+            y: 3.0 + FAIRY_RADIUS + 0.4,
+            angle: 0.0,
+            size: Size::Box { w: 0.8, h: 0.8 },
+        };
+        // A wolf far away, so the turn doesn't end early.
+        let wolf = Piece {
+            kind: PieceKind::Wolf(WolfKind::Wolf),
+            x: 40.0,
+            y: 0.5,
+            angle: 0.0,
+            size: Size::Ball { r: 0.5 },
+        };
+        Level {
+            pieces: vec![fairy, crate_, wolf],
+            pigs: vec![PigKind::Grunt],
+            ..Level::default()
+        }
+    }
+
+    #[test]
+    fn fairies_hold_things_up() {
+        let mut g = Game::new(&fairy_level());
+        run(&mut g, 300);
+        assert!(g.ents[0].alive, "the fairy left on her own");
+        assert!(g.ents[1].alive, "the crate broke");
+        assert!((g.ents[1].pos.y - (3.0 + FAIRY_RADIUS + 0.4)).abs() < 0.05);
+    }
+
+    #[test]
+    fn a_hit_fairy_flies_away_and_drops_her_load() {
+        let mut g = Game::new(&fairy_level());
+        run(&mut g, 90);
+        // Throw a pig straight at her.
+        let idx = g.spawn_pig(PigKind::Grunt, V2::new(22.0, 3.0), V2::new(12.0, 0.0));
+        g.phase = Phase::Flying {
+            ent: idx,
+            t: 0.0,
+            slow_t: 0.0,
+            used: false,
+            impact_t: None,
+        };
+        run(&mut g, 60);
+        assert!(!g.ents[0].alive, "the fairy stayed put");
+        assert!(g.events.iter().any(|e| matches!(e, Event::Flee { .. })));
+        run(&mut g, 120);
+        assert!(g.ents[1].pos.y < 1.0, "the crate didn't fall");
     }
 
     #[test]

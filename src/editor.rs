@@ -19,7 +19,8 @@ use crate::platform::{self, Ask};
 use crate::render::{self, View};
 use crate::share;
 use crate::sim::{
-    Ent, Game, Kind, Level, Material, Piece, PieceKind, PigKind, Shape, Size, V2, WolfKind,
+    Ent, FAIRY_RADIUS, Game, Kind, Level, Material, Piece, PieceKind, PigKind, Shape, Size, V2,
+    WolfKind,
 };
 
 /// Positions snap to this grid (meters).
@@ -35,6 +36,8 @@ pub enum Category {
     Blocks,
     Wolves,
     Pigs,
+    /// Fairies (and, one day, portals and other magic).
+    Magic,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -166,6 +169,7 @@ impl Editor {
             Some("earth") => Category::Earth,
             Some("wolves") => Category::Wolves,
             Some("pigs") => Category::Pigs,
+            Some("magic") => Category::Magic,
             _ => Category::Blocks,
         };
     }
@@ -277,6 +281,10 @@ fn bounds(poly: &[V2]) -> (V2, V2) {
 /// The height `p` would come to rest at if dropped straight down onto the
 /// ground or whatever is beneath it (pieces whose surface is below its center).
 fn drop_y(level: &Level, p: &Piece, exclude: Option<usize>) -> f32 {
+    if p.kind == PieceKind::Fairy {
+        // Fairies hover right where they're put.
+        return p.y;
+    }
     let at_zero = Piece { y: 0.0, ..*p };
     let shape = outline(&at_zero);
     let (lo, hi) = bounds(&shape);
@@ -365,6 +373,10 @@ pub fn draw_piece(view: &View, p: &Piece, time: f32, seed: u32) {
             let anim = Anim::new(time, seed, Mood::Idle, V2::new(-1.0, 0.0));
             art::wolf(view, w, pos, p.angle, p.size.radius(), 1.0, 0.0, &anim);
         }
+        PieceKind::Fairy => {
+            let anim = Anim::new(time, seed, Mood::Idle, V2::new(-1.0, 0.0));
+            art::fairy(view, pos, p.size.radius(), &anim, false);
+        }
         kind => {
             let kind = match kind {
                 PieceKind::Terrain => Kind::Rock,
@@ -429,6 +441,7 @@ fn category_picture(cat: Category, pic: Rect, time: f32) {
             0.0,
         ),
         Category::Wolves => piece(PieceKind::Wolf(WolfKind::Wolf), ball(0.5), 0.0),
+        Category::Magic => piece(PieceKind::Fairy, ball(FAIRY_RADIUS), 0.0),
         Category::Pigs => {
             let k = PigKind::Grunt;
             let view = View {
@@ -513,6 +526,7 @@ fn palette(cat: Category, mat: Material) -> Vec<Piece> {
         .into_iter()
         .map(|w| piece(PieceKind::Wolf(w), ball(w.radius()), 0.0))
         .collect(),
+        Category::Magic => vec![piece(PieceKind::Fairy, ball(FAIRY_RADIUS), 0.0)],
         Category::Pigs => Vec::new(),
     }
 }
@@ -1074,6 +1088,7 @@ impl App {
             (Category::Blocks, "Blocks"),
             (Category::Wolves, "Wolves"),
             (Category::Pigs, "Pigs"),
+            (Category::Magic, "Magic"),
         ];
         // Two columns of picture tabs.
         let tw = u * 0.24;

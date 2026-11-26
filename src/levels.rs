@@ -1,7 +1,7 @@
 //! Level definitions. Ground top is y = 0; the sling sits at x ≈ 6.
 
 use crate::sim::{
-    Launcher, Level, Material,
+    FAIRY_RADIUS, Launcher, Level, Material,
     Material::{Brick, Ice, Straw, Tnt, Wood},
     Piece, PieceKind,
     PigKind::{Boomer, Dasher, Grunt, Hog, Litter, Puffer, Thumper},
@@ -72,6 +72,13 @@ impl B {
     fn boulder(&mut self, x: f32, y: f32, r: f32) {
         self.add(PieceKind::Boulder, x, y + r, 0.0, Size::Ball { r });
     }
+    /// A fairy hovering with her middle at height `y`. Returns the top of her
+    /// head, where things can rest on her.
+    fn fairy(&mut self, x: f32, y: f32) -> f32 {
+        let r = FAIRY_RADIUS;
+        self.add(PieceKind::Fairy, x, y, 0.0, Size::Ball { r });
+        y + r
+    }
     /// Solid terrain from the ground up to `top`. Returns `top`.
     fn hill(&mut self, cx: f32, top: f32, w: f32) -> f32 {
         let size = Size::Box { w, h: top };
@@ -122,6 +129,7 @@ pub fn all() -> Vec<Level> {
         tin_hats(),
         twin_peaks(),
         big_bad_boss(),
+        fairy_lift(),
     ]
 }
 
@@ -317,4 +325,25 @@ fn big_bad_boss() -> Level {
     b.pup(30.0, t2);
     b.wolf(30.0, t3, 0.5);
     b.build("Big Bad Boss", vec![Thumper, Litter, Puffer, Boomer, Hog])
+}
+
+/// A hut held up in the sky by two fairies. Startle them and it all comes
+/// crashing down onto the wolves below.
+fn fairy_lift() -> Level {
+    let mut b = B::default();
+    let t = b.frame(29.0, 0.0, 3.0, 2.0, Wood);
+    b.wolf(29.0, 0.0, 0.5);
+    b.pup(29.0, t);
+
+    let held = b.fairy(27.0, 4.2);
+    b.fairy(31.0, 4.2);
+    let deck = b.plank(29.0, held, 6.0, Wood);
+    let roof = b.frame(29.0, deck, 2.4, 1.6, Straw);
+    b.wolf(29.0, deck, 0.5);
+    b.pup(29.0, roof);
+
+    let top = b.fairy(35.0, 2.6);
+    b.tnt(35.0, top);
+    b.helmet(36.4, 0.0);
+    b.build("Fairy Lift", vec![Grunt, Dasher, Grunt])
 }

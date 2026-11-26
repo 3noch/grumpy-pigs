@@ -26,18 +26,22 @@ procedurally, so there are no asset files.
 - **Materials**: straw, wood, brick, slippery and brittle **ice**, and **TNT** crates that
   explode when destroyed and can set each other off.
 - **Boulders and ramps**: knock a boulder loose and let it roll downhill into a fort.
+- **Fairies**: hover in mid-air holding up whatever rests on them, so structures can
+  float. Hit one (with a pig, flying debris or a blast) and she flies away, dropping
+  everything she was holding.
 - **Combos**: knock out several wolves within 1.5 s of each other for a DOUBLE / TRIPLE / MEGA KO bonus.
 
-12 levels, from "Straw Hut" to "Big Bad Boss".
+13 levels, from "Straw Hut" to "Big Bad Boss" and "Fairy Lift".
 
 ## Level editor
 
 Title screen → **My levels** → **+ New**, or tap the pencil while playing any level
 to remix it (remixes credit the original author).
 
-- **Earth / Blocks / Wolves / Pigs** palette along the bottom: drag a piece out and
+- **Earth / Blocks / Wolves / Pigs / Magic** palette along the bottom: drag a piece out and
   it drops onto whatever is below it (turn **Snap** off to place pieces freely).
-  Blocks come in straw, wood, brick and ice, plus TNT and boulders.
+  Blocks come in straw, wood, brick and ice, plus TNT and boulders. Magic has fairies,
+  which stay exactly where you put them (great for floating platforms).
 - Every button has a picture as well as a word, so kids who can't read yet can build too.
 - Tap a piece to select it: rotate in 10° steps, resize, copy, delete; tapping a
   material restyles the selected block. Drag the slingshot to move it, even onto a ledge.
@@ -142,7 +146,7 @@ Not yet built or tested on devices. These are the standard macroquad routes:
 ## Layout
 
 - `src/sim.rs`: physics world, damage model (impact Δv), pig powers, turn flow. No rendering, so it's unit-testable.
-- `src/levels.rs`: level builder helpers (`frame`, `post`, `plank`, `hill`, `ramp`, `tnt`, `boulder`, ...) and the 12 levels.
+- `src/levels.rs`: level builder helpers (`frame`, `post`, `plank`, `hill`, `ramp`, `tnt`, `boulder`, ...) and the 13 levels.
 - `src/gfx.rs`: vector toolkit: a posable "rig" (rotation + squash/stretch) and shaded, outlined mesh primitives.
 - `src/art.rs`: the animated characters. Pigs and wolves have moods (idle, aim, yell, dizzy, cheer / smug, worried, hurt, laugh), blinking, gaze tracking and squash-and-stretch.
 - `src/render.rs`: scenery, material-shaded blocks, sling, HUD helpers.
@@ -156,7 +160,7 @@ Dev aids (desktop build, environment variables):
 
 - `GRUMPY_SHOT=out.png GRUMPY_FRAMES=300` renders frames then saves a PNG and exits.
 - `GRUMPY_LEVEL=3`, `GRUMPY_LAUNCH=deg,pow`, `GRUMPY_TAP=secs`, `GRUMPY_AIM=deg,pow`: play a level and shoot.
-- `GRUMPY_EDIT=n` (0 = new), `GRUMPY_EDIT_SELECT=i`, `GRUMPY_EDIT_CAT=earth|blocks|wolves|pigs`: open the editor.
+- `GRUMPY_EDIT=n` (0 = new), `GRUMPY_EDIT_SELECT=i`, `GRUMPY_EDIT_CAT=earth|blocks|wolves|pigs|magic`: open the editor.
 - `GRUMPY_INPUT="10:p:435:659;14:m:600:350;18:r:640:300"`: replay pointer events
   (frame:press/move/release:x:y in screen points), e.g. to test editor drags.
 - `GRUMPY_MIRROR=1`, `GRUMPY_TAB=mine|friends`, `GRUMPY_LAUNCHER=x,y`.

@@ -91,6 +91,7 @@ fn piece_kind_id(kind: PieceKind) -> u64 {
         PieceKind::Wolf(WolfKind::Wolf) => 18,
         PieceKind::Wolf(WolfKind::Helmet) => 20,
         PieceKind::Wolf(WolfKind::Boss) => 22,
+        PieceKind::Fairy => 24,
     }
 }
 
@@ -108,13 +109,17 @@ fn piece_kind_from_id(id: u64) -> Option<PieceKind> {
         18 => PieceKind::Wolf(WolfKind::Wolf),
         20 => PieceKind::Wolf(WolfKind::Helmet),
         22 => PieceKind::Wolf(WolfKind::Boss),
+        24 => PieceKind::Fairy,
         _ => return None,
     })
 }
 
 /// Whether a kind is stored with a radius rather than width and height.
 fn is_round(kind: PieceKind) -> bool {
-    matches!(kind, PieceKind::Boulder | PieceKind::Wolf(_))
+    matches!(
+        kind,
+        PieceKind::Boulder | PieceKind::Wolf(_) | PieceKind::Fairy
+    )
 }
 
 fn pig_id(kind: PigKind) -> u64 {
