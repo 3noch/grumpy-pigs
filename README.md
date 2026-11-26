@@ -94,6 +94,7 @@ The web build is an installable Progressive Web App that works offline after the
 
 - **Android / desktop Chrome & Edge:** an **Install** button appears on the title screen.
 - **iPhone / iPad:** Safari → Share → **Add to Home Screen** (the title screen says so).
+- **Screen stays on** while the game is open (Screen Wake Lock, where the browser supports it).
 - **Fullscreen:** the corner button on the title screen and in-game, or press **F**.
   iPhone Safari has no fullscreen API, so there the button is hidden; installing to
   the Home Screen gives the full-screen experience instead.

@@ -275,6 +275,25 @@
     },
   });
 
+  // Keep the screen awake while the game is open (Screen Wake Lock API). The
+  // browser drops the lock whenever the page is hidden, so take it again each
+  // time the game becomes visible, and on taps in case a browser wants a user
+  // action first. Unsupported browsers just ignore this.
+  var wakeLock = null;
+  function keepAwake() {
+    if (!("wakeLock" in navigator) || wakeLock || document.visibilityState !== "visible") return;
+    navigator.wakeLock.request("screen").then(
+      function (lock) {
+        wakeLock = lock;
+        lock.addEventListener("release", function () { wakeLock = null; });
+      },
+      function () { /* refused (e.g. battery saver); try again on the next tap */ },
+    );
+  }
+  document.addEventListener("visibilitychange", keepAwake);
+  window.addEventListener("pointerup", keepAwake);
+  keepAwake();
+
   // Offline support. Skipped on file:// and inside sandboxed frames that forbid it.
   var secure = location.protocol === "https:" || location.hostname === "localhost";
   if ("serviceWorker" in navigator && secure) {
