@@ -7,8 +7,8 @@ use rapier2d::prelude::*;
 pub type V2 = rapier2d::math::Vector;
 
 pub const GRAVITY: f32 = -12.0;
-/// Resting position of the sling pouch, in world meters.
-pub const POUCH: (f32, f32) = (6.0, 3.4);
+/// Height of the sling pouch above the launcher's base.
+pub const SLING_HEIGHT: f32 = 3.4;
 pub const MAX_PULL: f32 = 2.6;
 pub const LAUNCH_K: f32 = 9.2;
 const DT: f32 = 1.0 / 60.0;
@@ -268,41 +268,87 @@ pub enum Event {
     },
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct BlockDef {
-    pub cx: f32,
-    pub cy: f32,
-    pub hw: f32,
-    pub hh: f32,
-    pub mat: Material,
+/// The visual setting a level takes place in. Only one exists so far.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Theme {
+    #[default]
+    Meadow,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct WolfDef {
+/// What a level piece is made of / does.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum PieceKind {
+    /// Immovable earth: hills, ledges and (tilted) ramps.
+    Terrain,
+    /// A breakable block of some material.
+    Block(Material),
+    /// A round stone that rolls.
+    Boulder,
+    Wolf(WolfKind),
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Size {
+    /// Full width and height, in meters.
+    Box {
+        w: f32,
+        h: f32,
+    },
+    Ball {
+        r: f32,
+    },
+}
+
+impl Size {
+    pub fn radius(self) -> f32 {
+        match self {
+            Size::Box { w, h } => w.min(h) / 2.0,
+            Size::Ball { r } => r,
+        }
+    }
+}
+
+/// One thing placed in a level, centered at (x, y), rotated by `angle` radians.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Piece {
+    pub kind: PieceKind,
     pub x: f32,
     pub y: f32,
-    pub r: f32,
-    pub kind: WolfKind,
-}
-
-/// Fixed terrain: a box, optionally tilted into a ramp.
-#[derive(Clone, Copy, Debug)]
-pub struct RockDef {
-    pub cx: f32,
-    pub cy: f32,
-    pub hw: f32,
-    pub hh: f32,
     pub angle: f32,
+    pub size: Size,
 }
 
-#[derive(Clone, Debug)]
+/// Where the slingshot stands: the point under its base, on the ground or on
+/// top of a platform.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Launcher {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl Default for Launcher {
+    fn default() -> Self {
+        Launcher { x: 6.0, y: 0.0 }
+    }
+}
+
+impl Launcher {
+    pub fn base(self) -> V2 {
+        V2::new(self.x, self.y)
+    }
+    /// Resting position of the sling pouch.
+    pub fn pouch(self) -> V2 {
+        V2::new(self.x, self.y + SLING_HEIGHT)
+    }
+}
+
+#[derive(Clone, PartialEq, Debug, Default)]
 pub struct Level {
-    pub name: &'static str,
-    pub blocks: Vec<BlockDef>,
-    pub wolves: Vec<WolfDef>,
-    pub rocks: Vec<RockDef>,
-    /// Round stone boulders: (x, y, radius).
-    pub boulders: Vec<(f32, f32, f32)>,
+    pub name: String,
+    pub author: String,
+    pub theme: Theme,
+    pub launcher: Launcher,
+    pub pieces: Vec<Piece>,
     pub pigs: Vec<PigKind>,
 }
 
@@ -329,6 +375,7 @@ pub enum Phase {
 
 pub struct Game {
     world: PhysicsWorld,
+    pub launcher: Launcher,
     pub ents: Vec<Ent>,
     pub pigs_left: Vec<PigKind>,
     pub phase: Phase,
@@ -358,6 +405,7 @@ impl Game {
 
         let mut g = Game {
             world,
+            launcher: level.launcher,
             ents: Vec::new(),
             pigs_left: level.pigs.clone(),
             phase: Phase::Aiming,
@@ -377,58 +425,71 @@ impl Game {
         g.world
             .insert(ground, ColliderBuilder::cuboid(200.0, 5.0).friction(0.9));
 
-        for r in &level.rocks {
-            let body = RigidBodyBuilder::fixed()
-                .translation(V2::new(r.cx, r.cy))
-                .rotation(r.angle);
-            let col = ColliderBuilder::cuboid(r.hw, r.hh).friction(0.9);
-            let (h, c) = g.world.insert(body, col);
-            let shape = Shape::Box { hw: r.hw, hh: r.hh };
-            g.push(h, c, Kind::Rock, shape, f32::INFINITY);
-        }
-        for b in &level.blocks {
-            let body = RigidBodyBuilder::dynamic().translation(V2::new(b.cx, b.cy));
-            let col = ColliderBuilder::cuboid(b.hw, b.hh)
-                .density(b.mat.density())
-                .friction(b.mat.friction())
-                .restitution(0.05);
-            let (h, c) = g.world.insert(body, col);
-            let shape = Shape::Box { hw: b.hw, hh: b.hh };
-            g.push(h, c, Kind::Block(b.mat), shape, b.mat.hp());
-            g.max_score += b.mat.points();
-        }
-        for &(x, y, r) in &level.boulders {
-            let body = RigidBodyBuilder::dynamic()
-                .translation(V2::new(x, y))
-                .angular_damping(0.1);
-            let col = ColliderBuilder::ball(r)
-                .density(Material::Stone.density())
-                .friction(Material::Stone.friction())
-                .restitution(0.1);
-            let (h, c) = g.world.insert(body, col);
-            let kind = Kind::Block(Material::Stone);
-            g.push(h, c, kind, Shape::Ball { r }, Material::Stone.hp());
-        }
-        for w in &level.wolves {
-            let body = RigidBodyBuilder::dynamic()
-                .translation(V2::new(w.x, w.y))
-                .angular_damping(1.0);
-            let col = ColliderBuilder::ball(w.r)
-                .density(1.0)
-                .friction(0.8)
-                .restitution(0.1);
-            let (h, c) = g.world.insert(body, col);
-            g.push(
-                h,
-                c,
-                Kind::Wolf(w.kind),
-                Shape::Ball { r: w.r },
-                w.kind.hp(),
-            );
-            g.max_score += w.kind.points();
+        for piece in &level.pieces {
+            g.add_piece(piece);
         }
         g.max_score += 10_000 * u32::try_from(level.pigs.len().saturating_sub(1)).unwrap_or(0);
         g
+    }
+
+    fn add_piece(&mut self, p: &Piece) {
+        // Keep sizes physically sane; shared levels can contain anything.
+        const MIN: f32 = 0.01;
+        let size = match (p.kind, p.size) {
+            // Wolves are always round.
+            (PieceKind::Wolf(_), s) => Size::Ball {
+                r: s.radius().max(MIN),
+            },
+            (_, Size::Box { w, h }) => Size::Box {
+                w: w.max(MIN),
+                h: h.max(MIN),
+            },
+            (_, Size::Ball { r }) => Size::Ball { r: r.max(MIN) },
+        };
+        let body = match p.kind {
+            PieceKind::Terrain => RigidBodyBuilder::fixed(),
+            PieceKind::Boulder => RigidBodyBuilder::dynamic().angular_damping(0.1),
+            PieceKind::Wolf(_) => RigidBodyBuilder::dynamic().angular_damping(1.0),
+            PieceKind::Block(_) => RigidBodyBuilder::dynamic(),
+        }
+        .translation(V2::new(p.x, p.y))
+        .rotation(p.angle);
+        let (col, shape) = match size {
+            Size::Box { w, h } => (
+                ColliderBuilder::cuboid(w / 2.0, h / 2.0),
+                Shape::Box {
+                    hw: w / 2.0,
+                    hh: h / 2.0,
+                },
+            ),
+            Size::Ball { r } => (ColliderBuilder::ball(r), Shape::Ball { r }),
+        };
+        let (col, kind, hp) = match p.kind {
+            PieceKind::Terrain => (col.friction(0.9), Kind::Rock, f32::INFINITY),
+            PieceKind::Block(m) => {
+                self.max_score += m.points();
+                let col = col
+                    .density(m.density())
+                    .friction(m.friction())
+                    .restitution(0.05);
+                (col, Kind::Block(m), m.hp())
+            }
+            PieceKind::Boulder => {
+                let m = Material::Stone;
+                let col = col
+                    .density(m.density())
+                    .friction(m.friction())
+                    .restitution(0.1);
+                (col, Kind::Block(m), m.hp())
+            }
+            PieceKind::Wolf(w) => {
+                self.max_score += w.points();
+                let col = col.density(1.0).friction(0.8).restitution(0.1);
+                (col, Kind::Wolf(w), w.hp())
+            }
+        };
+        let (h, c) = self.world.insert(body, col);
+        self.push(h, c, kind, shape, hp);
     }
 
     fn push(
@@ -503,8 +564,8 @@ impl Game {
         None
     }
 
-    pub fn pouch() -> V2 {
-        V2::new(POUCH.0, POUCH.1)
+    pub fn pouch(&self) -> V2 {
+        self.launcher.pouch()
     }
 
     pub fn launch_velocity(pull: V2) -> V2 {
@@ -512,8 +573,8 @@ impl Game {
     }
 
     /// Sample points of the predicted flight path for a given pull.
-    pub fn trajectory(pull: V2, n: usize, step: f32) -> Vec<V2> {
-        let p0 = Self::pouch() + pull;
+    pub fn trajectory(&self, pull: V2, n: usize, step: f32) -> Vec<V2> {
+        let p0 = self.pouch() + pull;
         let v = Self::launch_velocity(pull);
         (1..=n)
             .map(|i| {
@@ -545,7 +606,7 @@ impl Game {
         }
         let pull = pull.clamp_length_max(MAX_PULL);
         let kind = self.pigs_left.remove(0);
-        let idx = self.spawn_pig(kind, Self::pouch() + pull, Self::launch_velocity(pull));
+        let idx = self.spawn_pig(kind, self.pouch() + pull, Self::launch_velocity(pull));
         self.aim = None;
         self.phase = Phase::Flying {
             ent: idx,

@@ -1,31 +1,33 @@
 //! Level definitions. Ground top is y = 0; the sling sits at x ≈ 6.
 
 use crate::sim::{
-    BlockDef, Level, Material,
+    Launcher, Level, Material,
     Material::{Brick, Ice, Straw, Tnt, Wood},
+    Piece, PieceKind,
     PigKind::{Boomer, Dasher, Grunt, Hog, Litter, Puffer, Thumper},
-    RockDef, WolfDef, WolfKind,
+    Size, Theme, WolfKind,
 };
 
 const T: f32 = 0.4; // thickness of posts and planks
 
 #[derive(Default)]
 struct B {
-    blocks: Vec<BlockDef>,
-    wolves: Vec<WolfDef>,
-    rocks: Vec<RockDef>,
-    boulders: Vec<(f32, f32, f32)>,
+    pieces: Vec<Piece>,
 }
 
 impl B {
-    fn rect(&mut self, cx: f32, bottom: f32, w: f32, h: f32, mat: Material) -> f32 {
-        self.blocks.push(BlockDef {
-            cx,
-            cy: bottom + h / 2.0,
-            hw: w / 2.0,
-            hh: h / 2.0,
-            mat,
+    fn add(&mut self, kind: PieceKind, x: f32, y: f32, angle: f32, size: Size) {
+        self.pieces.push(Piece {
+            kind,
+            x,
+            y,
+            angle,
+            size,
         });
+    }
+    fn rect(&mut self, cx: f32, bottom: f32, w: f32, h: f32, mat: Material) -> f32 {
+        let size = Size::Box { w, h };
+        self.add(PieceKind::Block(mat), cx, bottom + h / 2.0, 0.0, size);
         bottom + h
     }
     /// Vertical post with its bottom at `y`. Returns its top.
@@ -51,12 +53,7 @@ impl B {
         self.cube(cx, y, 0.8, Tnt)
     }
     fn critter(&mut self, x: f32, y: f32, r: f32, kind: WolfKind) {
-        self.wolves.push(WolfDef {
-            x,
-            y: y + r,
-            r,
-            kind,
-        });
+        self.add(PieceKind::Wolf(kind), x, y + r, 0.0, Size::Ball { r });
     }
     /// A regular wolf of radius `r`, standing at `y`.
     fn wolf(&mut self, x: f32, y: f32, r: f32) {
@@ -73,17 +70,12 @@ impl B {
     }
     /// A round stone resting at `y`.
     fn boulder(&mut self, x: f32, y: f32, r: f32) {
-        self.boulders.push((x, y + r, r));
+        self.add(PieceKind::Boulder, x, y + r, 0.0, Size::Ball { r });
     }
     /// Solid terrain from the ground up to `top`. Returns `top`.
     fn hill(&mut self, cx: f32, top: f32, w: f32) -> f32 {
-        self.rocks.push(RockDef {
-            cx,
-            cy: top / 2.0,
-            hw: w / 2.0,
-            hh: top / 2.0,
-            angle: 0.0,
-        });
+        let size = Size::Box { w, h: top };
+        self.add(PieceKind::Terrain, cx, top / 2.0, 0.0, size);
         top
     }
     /// A solid slope whose top surface runs from (x0, y0) to (x1, y1).
@@ -94,21 +86,22 @@ impl B {
         let angle = dy.atan2(dx);
         // Push the box below the surface line along its downward normal.
         let (nx, ny) = (angle.sin(), -angle.cos());
-        self.rocks.push(RockDef {
-            cx: f32::midpoint(x0, x1) + nx * thick / 2.0,
-            cy: f32::midpoint(y0, y1) + ny * thick / 2.0,
-            hw: len / 2.0,
-            hh: thick / 2.0,
+        let size = Size::Box { w: len, h: thick };
+        self.add(
+            PieceKind::Terrain,
+            f32::midpoint(x0, x1) + nx * thick / 2.0,
+            f32::midpoint(y0, y1) + ny * thick / 2.0,
             angle,
-        });
+            size,
+        );
     }
     fn build(self, name: &'static str, pigs: Vec<crate::sim::PigKind>) -> Level {
         Level {
-            name,
-            blocks: self.blocks,
-            wolves: self.wolves,
-            rocks: self.rocks,
-            boulders: self.boulders,
+            name: name.to_owned(),
+            author: "Grumpy Pigs".to_owned(),
+            theme: Theme::Meadow,
+            launcher: Launcher::default(),
+            pieces: self.pieces,
             pigs,
         }
     }

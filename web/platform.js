@@ -9,6 +9,84 @@
 
   var HOTSPOT_FULLSCREEN = 1;
   var HOTSPOT_INSTALL = 2;
+  var HOTSPOT_SHARE = 3;
+  var shareText = "";
+  var shareResult = 0; // 1 shared, 2 copied, 3 failed
+  var pendingLink = null;
+
+  // A level link looks like ...#L1.<data>. Take it, then tidy the address bar
+  // so reloading doesn't offer the same level again.
+  function grabLink() {
+    var h = location.hash;
+    if (h && /^#L\d+\./.test(h)) {
+      pendingLink = h.slice(1);
+      try {
+        history.replaceState(null, "", location.pathname + location.search);
+      } catch (e) { /* not allowed here; harmless */ }
+    }
+  }
+  grabLink();
+  window.addEventListener("hashchange", grabLink);
+
+  function copyText(text) {
+    function fallback() {
+      try {
+        var ta = document.createElement("textarea");
+        ta.value = text;
+        ta.setAttribute("readonly", "");
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        var ok = document.execCommand("copy");
+        document.body.removeChild(ta);
+        shareResult = ok ? 2 : 3;
+      } catch (e) {
+        shareResult = 3;
+      }
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { shareResult = 2; }, fallback);
+    } else {
+      fallback();
+    }
+  }
+
+  function share() {
+    if (!shareText) return;
+    var text = shareText;
+    if (navigator.share) {
+      navigator.share({ title: "Grumpy Pigs level", url: text }).then(
+        function () { shareResult = 1; },
+        function (e) { if (!e || e.name !== "AbortError") copyText(text); },
+      );
+    } else {
+      copyText(text);
+    }
+  }
+
+  // Moving strings across the wasm boundary.
+  function memBytes(ptr, len) {
+    return new Uint8Array(wasm_memory.buffer, ptr, len);
+  }
+  function readStr(ptr, len) {
+    return new TextDecoder().decode(memBytes(ptr, len).slice());
+  }
+  function utf8(str) {
+    return new TextEncoder().encode(str);
+  }
+  function pageString(which) {
+    if (which === 1) return pendingLink;
+    if (which === 2) return location.origin + location.pathname;
+    return null;
+  }
+  function storeGet(key) {
+    try {
+      return localStorage.getItem("grumpy-pigs." + key);
+    } catch (e) {
+      return null;
+    }
+  }
   var hotspots = [];
   var installPrompt = null;
 
@@ -89,6 +167,7 @@
       if (x >= h.x && x <= h.x + h.w && y >= h.y && y <= h.y + h.h) {
         if (h.id === HOTSPOT_FULLSCREEN) toggleFullscreen();
         if (h.id === HOTSPOT_INSTALL) promptInstall();
+        if (h.id === HOTSPOT_SHARE) share();
         return;
       }
     }
@@ -131,6 +210,38 @@
         } catch (e) {
           return 0;
         }
+      };
+      env.gp_str_len = function (which) {
+        var s = pageString(which);
+        return s == null ? -1 : utf8(s).length;
+      };
+      env.gp_str_read = function (which, dst) {
+        var b = utf8(pageString(which) || "");
+        memBytes(dst, b.length).set(b);
+      };
+      env.gp_store_len = function (kptr, klen) {
+        var v = storeGet(readStr(kptr, klen));
+        return v == null ? -1 : utf8(v).length;
+      };
+      env.gp_store_read = function (kptr, klen, dst) {
+        var b = utf8(storeGet(readStr(kptr, klen)) || "");
+        memBytes(dst, b.length).set(b);
+      };
+      env.gp_store_write = function (kptr, klen, vptr, vlen) {
+        try {
+          localStorage.setItem("grumpy-pigs." + readStr(kptr, klen), readStr(vptr, vlen));
+        } catch (e) { /* storage full or unavailable */ }
+      };
+      env.gp_link_clear = function () {
+        pendingLink = null;
+      };
+      env.gp_share_set = function (ptr, len) {
+        shareText = readStr(ptr, len);
+      };
+      env.gp_share_result = function () {
+        var r = shareResult;
+        shareResult = 0;
+        return r;
       };
       env.gp_pref_set = function (key, value) {
         try {

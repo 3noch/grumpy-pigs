@@ -1,10 +1,13 @@
 //! Grumpy Pigs — fling furious pigs at the smug wolves who stole their mud.
 
 mod art;
+mod bank;
 mod gfx;
 mod levels;
+mod menu;
 mod platform;
 mod render;
+mod share;
 mod sim;
 
 use art::{Anim, Mood};
@@ -44,9 +47,21 @@ struct Popup {
     color: Color,
 }
 
+/// Where the level being played came from.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Source {
+    Builtin(usize),
+    /// From the bank or a shared link.
+    Custom,
+}
+
 enum Screen {
     Menu,
-    Play { idx: usize, game: Box<Game> },
+    Play {
+        src: Source,
+        level: Box<Level>,
+        game: Box<Game>,
+    },
 }
 
 struct App {
@@ -63,6 +78,15 @@ struct App {
     /// Left-handed mode: sling on the right, firing left.
     mirrored: bool,
     time: f32,
+    bank: bank::Bank,
+    tab: menu::Tab,
+    page: usize,
+    incoming: Option<menu::Incoming>,
+    /// Bank entry (by code) awaiting a second tap to delete.
+    confirm_delete: Option<String>,
+    /// Best stars for bank/link levels, by level code.
+    custom_stars: std::collections::HashMap<String, u8>,
+    toast: Option<(String, f32)>,
 }
 
 #[derive(Default)]
@@ -128,6 +152,8 @@ enum Icon {
     Expand,
     Collapse,
     Mirror,
+    Share,
+    Trash,
 }
 
 /// Draws a rounded button with a line icon; true if tapped this frame.
@@ -184,6 +210,29 @@ fn icon_button(rect: Rect, icon: Icon, input: &Input, accent: Color) -> bool {
                 line(pivot, pivot + vec2(hx, 0.0));
                 line(pivot, pivot + vec2(0.0, vy));
                 draw_circle(pivot.x, pivot.y, w / 2.0, WHITE);
+            }
+        }
+        Icon::Share => {
+            // An open tray with an arrow rising out of it.
+            line(c + vec2(-k * 0.8, -k * 0.05), c + vec2(-k * 0.8, k));
+            line(c + vec2(-k * 0.8, k), c + vec2(k * 0.8, k));
+            line(c + vec2(k * 0.8, k), c + vec2(k * 0.8, -k * 0.05));
+            line(c + vec2(0.0, k * 0.45), c + vec2(0.0, -k * 0.9));
+            draw_triangle(
+                c + vec2(0.0, -k * 1.15),
+                c + vec2(-k * 0.45, -k * 0.6),
+                c + vec2(k * 0.45, -k * 0.6),
+                WHITE,
+            );
+        }
+        Icon::Trash => {
+            line(c + vec2(-k * 0.9, -k * 0.6), c + vec2(k * 0.9, -k * 0.6));
+            line(c + vec2(-k * 0.3, -k * 0.85), c + vec2(k * 0.3, -k * 0.85));
+            line(c + vec2(-k * 0.65, -k * 0.6), c + vec2(-k * 0.5, k));
+            line(c + vec2(k * 0.65, -k * 0.6), c + vec2(k * 0.5, k));
+            line(c + vec2(-k * 0.5, k), c + vec2(k * 0.5, k));
+            for x in [-0.2, 0.2] {
+                line(c + vec2(x * k, -k * 0.3), c + vec2(x * k, k * 0.7));
             }
         }
         Icon::Mirror => {
@@ -276,7 +325,18 @@ impl App {
             aim_start: None,
             mirrored: platform::pref(platform::Pref::Mirror),
             time: 0.0,
+            bank: bank::Bank::load(),
+            tab: menu::Tab::Levels,
+            page: 0,
+            incoming: None,
+            confirm_delete: None,
+            custom_stars: std::collections::HashMap::new(),
+            toast: None,
         }
+    }
+
+    fn toast(&mut self, text: &str) {
+        self.toast = Some((text.to_owned(), 2.2));
     }
 
     fn toggle_mirror(&mut self) {
@@ -286,12 +346,22 @@ impl App {
     }
 
     fn start(&mut self, idx: usize) {
+        let level = self.levels[idx].clone();
+        self.begin(Source::Builtin(idx), level);
+    }
+
+    fn start_custom(&mut self, level: Level) {
+        self.begin(Source::Custom, level);
+    }
+
+    fn begin(&mut self, src: Source, level: Level) {
         self.particles.clear();
         self.popups.clear();
         self.aim_start = None;
         self.screen = Screen::Play {
-            idx,
-            game: Box::new(Game::new(&self.levels[idx])),
+            src,
+            game: Box::new(Game::new(&level)),
+            level: Box::new(level),
         };
     }
 
@@ -300,6 +370,20 @@ impl App {
         self.time += dt;
         platform::begin_frame();
         let input = Input::read();
+        if let Some(link) = platform::take_link() {
+            self.incoming = Some(menu::Incoming {
+                level: share::decode(&link),
+                saved: false,
+            });
+            self.screen = Screen::Menu;
+        }
+        match platform::share_result() {
+            Some(platform::ShareResult::Copied) => {
+                self.toast("Link copied - paste it to a friend!");
+            }
+            Some(platform::ShareResult::Failed) => self.toast("Couldn't share that link"),
+            Some(platform::ShareResult::Shared) | None => {}
+        }
 
         let shake = if self.shake > 0.0 {
             let m = self.shake * ui_unit() * 0.02;
@@ -315,108 +399,39 @@ impl App {
             Screen::Menu => self.menu(&input),
             Screen::Play { .. } => self.play(&input, &view, dt),
         }
+        self.draw_toast(dt);
     }
 
-    fn menu(&mut self, input: &Input) {
-        let (sw, sh) = (screen_width(), screen_height());
+    fn draw_toast(&mut self, dt: f32) {
+        let Some((text, life)) = &mut self.toast else {
+            return;
+        };
+        *life -= dt;
+        let a = life.clamp(0.0, 1.0);
         let u = ui_unit();
-        draw_rectangle(0.0, 0.0, sw, sh, Color::new(0.0, 0.0, 0.0, 0.15));
-
-        // A couple of mascots
-        let deco = View::fit(Vec2::ZERO, self.mirrored);
-        let hop = (self.time * 4.0).sin().abs();
-        let mut grunt = Anim::new(self.time, 3, Mood::Yell, V2::new(1.0, 0.3));
-        grunt.stretch = (hop - 0.5) * 0.2;
-        art::pig(
-            &deco,
-            sim::PigKind::Grunt,
-            V2::new(8.0, 0.5 + hop * 0.8),
-            (self.time * 2.0).sin() * 0.2,
-            &grunt,
-        );
-        let hog = Anim::new(self.time, 5, Mood::Idle, V2::new(1.0, 0.2));
-        art::pig(&deco, sim::PigKind::Hog, V2::new(4.5, 0.7), 0.0, &hog);
-        let smug = Anim::new(self.time, 9, Mood::Idle, V2::new(-1.0, -0.2));
-        art::wolf(
-            &deco,
-            sim::WolfKind::Boss,
-            V2::new(35.0, 0.95),
-            0.0,
-            0.95,
-            1.0,
-            0.0,
-            &smug,
-        );
-
+        let size = u * 0.04;
+        let w = measure_text(text.as_str(), None, render::font_size(size), 1.0).width + size * 1.6;
+        let (sw, sh) = (screen_width(), screen_height());
+        let r = Rect::new((sw - w) / 2.0, sh * 0.9 - size * 1.1, w, size * 1.8);
+        draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.1, 0.1, 0.15, 0.8 * a));
         render::text_centered(
-            "GRUMPY PIGS",
+            text,
             sw / 2.0,
-            sh * 0.17,
-            u * 0.14,
-            Color::from_rgba(255, 170, 190, 255),
+            r.y + size * 1.25,
+            size,
+            Color::new(1.0, 1.0, 1.0, a),
         );
-        render::text_centered(
-            "Those wolves took our mud. Get it back.",
-            sw / 2.0,
-            sh * 0.245,
-            u * 0.045,
-            WHITE,
-        );
-
-        if menu_corner_controls(input, self.mirrored) {
-            self.toggle_mirror();
-        }
-
-        let n = self.levels.len();
-        let cols = n.div_ceil(2).max(1);
-        let bw = (u * 0.15).min(sw * 0.8 / cols as f32 - u * 0.03);
-        let gap = u * 0.035;
-        let pitch_y = bw + u * 0.1;
-        let total = cols as f32 * bw + (cols - 1) as f32 * gap;
-        let x0 = (sw - total) / 2.0;
-        let y0 = sh * 0.31;
-        let mut chosen = None;
-        for i in 0..n {
-            let (row, col) = (i / cols, i % cols);
-            let r = Rect::new(
-                x0 + col as f32 * (bw + gap),
-                y0 + row as f32 * pitch_y,
-                bw,
-                bw,
-            );
-            if button(r, &format!("{}", i + 1), input, ORANGE) {
-                chosen = Some(i);
-            }
-            let label_size = u * 0.024;
-            render::text_centered(
-                self.levels[i].name,
-                r.center().x,
-                r.bottom() + label_size * 1.4,
-                label_size,
-                WHITE,
-            );
-            for s in 0..3u8 {
-                let c = vec2(
-                    r.center().x + (f32::from(s) - 1.0) * bw * 0.3,
-                    r.bottom() + label_size * 2.6,
-                );
-                render::star(c, bw * 0.1, s < self.best_stars[i]);
-            }
-        }
-        render::text_centered(
-            "Pull back anywhere to aim  -  release to fling  -  tap mid-air for powers",
-            sw / 2.0,
-            sh * 0.845,
-            u * 0.035,
-            WHITE,
-        );
-        if let Some(i) = chosen {
-            self.start(i);
+        if *life <= 0.0 {
+            self.toast = None;
         }
     }
 
     fn play(&mut self, input: &Input, view: &View, dt: f32) {
-        let Screen::Play { idx, mut game } = std::mem::replace(&mut self.screen, Screen::Menu)
+        let Screen::Play {
+            src,
+            level,
+            mut game,
+        } = std::mem::replace(&mut self.screen, Screen::Menu)
         else {
             return;
         };
@@ -432,19 +447,29 @@ impl App {
         self.draw_world(&game, view);
         self.draw_effects(view, dt);
 
-        let mut nav = self.draw_hud(idx, &game, input, &hud);
-        let overlay = self.end_overlay(idx, &game, input);
+        let mut nav = self.draw_hud(src, &level, &game, input, &hud);
+        let overlay = self.end_overlay(src, &level, &game, input);
         if nav == Nav::Stay {
             nav = overlay;
         }
 
-        self.screen = Screen::Play { idx, game };
+        let level_copy = (*level).clone();
+        self.screen = Screen::Play { src, level, game };
         match nav {
             Nav::Stay => {}
             Nav::Menu => self.screen = Screen::Menu,
-            Nav::Restart => self.start(idx),
-            Nav::Next => self.start(idx + 1),
+            Nav::Restart => self.begin(src, level_copy),
+            Nav::Next => {
+                if let Source::Builtin(i) = src {
+                    self.start(i + 1);
+                }
+            }
             Nav::Mirror => self.toggle_mirror(),
+            Nav::Save => {
+                if self.bank.add(&level_copy, bank::Shelf::Friends) {
+                    self.toast("Saved to From friends");
+                }
+            }
         }
     }
 
@@ -615,11 +640,12 @@ impl App {
         let pig_pos = flight.map(|f| game.ents[f.ent].pos);
         let lost = matches!(game.phase, Phase::Lost { .. });
 
-        let aim_pos = game.aim.map(|p| Game::pouch() + p);
+        let aim_pos = game.aim.map(|p| game.pouch() + p);
+        let base = game.launcher.base();
         let loaded = game.current_pig();
-        let band_pos = loaded.map(|_| aim_pos.unwrap_or(Game::pouch()));
+        let band_pos = loaded.map(|_| aim_pos.unwrap_or(game.pouch()));
         render::grass(view, self.time);
-        render::sling_back(view, band_pos);
+        render::sling_back(view, base, band_pos);
         render::queue(view, game, self.time);
 
         for (i, e) in game.ents.iter().enumerate().filter(|(_, e)| e.alive) {
@@ -644,7 +670,7 @@ impl App {
                     } else {
                         Mood::Idle
                     };
-                    anim.look = pig_pos.unwrap_or(Game::pouch()) - e.pos;
+                    anim.look = pig_pos.unwrap_or(game.pouch()) - e.pos;
                     art::wolf(
                         view,
                         wolf_kind,
@@ -691,11 +717,11 @@ impl App {
             }
             art::pig(view, k, p, 0.0, &anim);
         }
-        render::sling_front(view, band_pos);
+        render::sling_front(view, base, band_pos);
         if let Some(pull) = game.aim
             && pull.length() > 0.5
         {
-            render::trajectory(view, pull, self.time);
+            render::trajectory(view, game, pull, self.time);
         }
     }
 
@@ -728,12 +754,22 @@ impl App {
         });
     }
 
-    fn draw_hud(&self, idx: usize, game: &Game, input: &Input, hud: &HudButtons) -> Nav {
+    fn draw_hud(
+        &self,
+        src: Source,
+        level: &Level,
+        game: &Game,
+        input: &Input,
+        hud: &HudButtons,
+    ) -> Nav {
         let u = ui_unit();
         let (sw, sh) = (screen_width(), screen_height());
-        let level = &self.levels[idx];
-        let title = format!("{}. {}", idx + 1, level.name);
-        render::text_centered(&title, sw / 2.0, u * 0.08, u * 0.055, WHITE);
+        let title = match src {
+            Source::Builtin(i) => format!("{}. {}", i + 1, level.name),
+            Source::Custom if level.author.is_empty() => level.name.clone(),
+            Source::Custom => format!("{}  -  by {}", level.name, level.author),
+        };
+        render::text_centered(&title, sw / 2.0, u * 0.08, u * 0.05, WHITE);
 
         let score = game.score.to_string();
         let sz = u * 0.07;
@@ -753,7 +789,7 @@ impl App {
             _ if game.phase == Phase::Aiming
                 && game.aim.is_none()
                 && game.time < 6.0
-                && idx == 0
+                && src == Source::Builtin(0)
                 && game.pigs_left.len() == level.pigs.len() =>
             {
                 "Drag back and release to fling!"
@@ -767,6 +803,10 @@ impl App {
         if let Some(full) = hud.full {
             fullscreen_button(full, input);
         }
+        platform::share_hotspot(hud.share, &menu::share_link(level));
+        if icon_button(hud.share, Icon::Share, input, SLATE) {
+            platform::activate(platform::Hotspot::Share);
+        }
         if icon_button(hud.menu, Icon::Menu, input, SLATE) {
             Nav::Menu
         } else if icon_button(hud.retry, Icon::Restart, input, SLATE) {
@@ -779,7 +819,7 @@ impl App {
     }
 
     /// Win/lose panel with stars and navigation; records best stars.
-    fn end_overlay(&mut self, idx: usize, game: &Game, input: &Input) -> Nav {
+    fn end_overlay(&mut self, src: Source, level: &Level, game: &Game, input: &Input) -> Nav {
         let (Phase::Won { t } | Phase::Lost { t }) = game.phase else {
             return Nav::Stay;
         };
@@ -811,7 +851,13 @@ impl App {
         render::text_centered(title, sw / 2.0, panel.y + ph * 0.17, u * 0.07, color);
         if won {
             let st = game.stars();
-            self.best_stars[idx] = self.best_stars[idx].max(st);
+            match src {
+                Source::Builtin(i) => self.best_stars[i] = self.best_stars[i].max(st),
+                Source::Custom => {
+                    let best = self.custom_stars.entry(share::encode(level)).or_insert(0);
+                    *best = (*best).max(st);
+                }
+            }
             for s in 0..3u8 {
                 let fs = f32::from(s);
                 let pop = ((t - 0.9 - fs * 0.25) * 4.0).clamp(0.0, 1.0);
@@ -830,8 +876,9 @@ impl App {
 
         let (bw, bh, gap) = (u * 0.24, u * 0.1, u * 0.04);
         let by = panel.bottom() - bh * 1.5;
-        let has_next = won && idx + 1 < self.levels.len();
-        let count = if has_next { 3.0 } else { 2.0 };
+        let has_next = won && matches!(src, Source::Builtin(i) if i + 1 < self.levels.len());
+        let can_save = src == Source::Custom && !self.bank.contains(&share::encode(level));
+        let count = if has_next || can_save { 3.0 } else { 2.0 };
         let total = count * bw + (count - 1.0) * gap;
         let x0 = (sw - total) * 0.5;
         let slot = |i: f32| Rect::new(x0 + i * (bw + gap), by, bw, bh);
@@ -841,6 +888,8 @@ impl App {
             Nav::Restart
         } else if has_next && button(slot(2.0), "Next", input, GREEN) {
             Nav::Next
+        } else if can_save && button(slot(2.0), "Save", input, GREEN) {
+            Nav::Save
         } else {
             Nav::Stay
         }
@@ -854,6 +903,7 @@ enum Nav {
     Restart,
     Next,
     Mirror,
+    Save,
 }
 
 /// The always-visible buttons along the top-left: menu, retry, mirror and
@@ -861,6 +911,7 @@ enum Nav {
 struct HudButtons {
     menu: Rect,
     retry: Rect,
+    share: Rect,
     mirror: Rect,
     full: Option<Rect>,
 }
@@ -873,14 +924,16 @@ impl HudButtons {
         HudButtons {
             menu: slot(0.0),
             retry: slot(1.0),
-            mirror: slot(2.0),
-            full: (platform::fullscreen() != platform::Fullscreen::Unavailable).then(|| slot(3.0)),
+            share: slot(2.0),
+            mirror: slot(3.0),
+            full: (platform::fullscreen() != platform::Fullscreen::Unavailable).then(|| slot(4.0)),
         }
     }
     fn contains(&self, p: Vec2) -> bool {
         [
             Some(self.menu),
             Some(self.retry),
+            Some(self.share),
             Some(self.mirror),
             self.full,
         ]
@@ -978,6 +1031,27 @@ async fn main() {
     };
     if std::env::var("GRUMPY_MIRROR").is_ok_and(|v| v == "1") {
         app.mirrored = true;
+    }
+    match std::env::var("GRUMPY_TAB").as_deref() {
+        Ok("mine") => app.tab = menu::Tab::Mine,
+        Ok("friends") => app.tab = menu::Tab::Friends,
+        _ => {}
+    }
+    // Dev aid: `GRUMPY_LAUNCHER=x,y` stands the sling on a platform at (x, y).
+    if let Some((x, y)) = std::env::var("GRUMPY_LAUNCHER").ok().and_then(|v| {
+        let (x, y) = v.split_once(',')?;
+        Some((x.trim().parse::<f32>().ok()?, y.trim().parse::<f32>().ok()?))
+    }) {
+        for level in &mut app.levels {
+            level.launcher = sim::Launcher { x, y };
+            level.pieces.push(sim::Piece {
+                kind: sim::PieceKind::Terrain,
+                x: x - 1.8,
+                y: y / 2.0,
+                angle: 0.0,
+                size: sim::Size::Box { w: 7.0, h: y },
+            });
+        }
     }
     if let Some(level) = std::env::var("GRUMPY_LEVEL")
         .ok()

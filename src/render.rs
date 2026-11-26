@@ -454,9 +454,12 @@ fn rock(view: &View, e: &Ent, hw: f32, hh: f32) {
     rig.rect_grad(-hw, hh - 0.35, hw, hh, rgb(118, 190, 88), rgb(84, 156, 62));
 }
 
-pub fn sling_back(view: &View, pig_pos: Option<V2>) {
-    let rig = Rig::new(*view, V2::ZERO, 0.0, 1.0);
-    let (px, py) = sim::POUCH;
+/// The slingshot's back half (behind the pig). `base` is where it stands;
+/// everything below is drawn relative to it.
+pub fn sling_back(view: &View, base: V2, pig_pos: Option<V2>) {
+    let rig = Rig::new(*view, V2::new(0.0, base.y), 0.0, 1.0);
+    let (px, py) = (base.x, sim::SLING_HEIGHT);
+    let pig_pos = pig_pos.map(|p| V2::new(p.x, p.y - base.y));
     let bark = rgb(120, 80, 45);
     let line = rgb(60, 36, 20);
     // Trunk: tapered with a highlight.
@@ -494,9 +497,9 @@ pub fn sling_back(view: &View, pig_pos: Option<V2>) {
     }
 }
 
-pub fn sling_front(view: &View, pig_pos: Option<V2>) {
-    let rig = Rig::new(*view, V2::ZERO, 0.0, 1.0);
-    let (px, py) = sim::POUCH;
+pub fn sling_front(view: &View, base: V2, pig_pos: Option<V2>) {
+    let rig = Rig::new(*view, V2::new(0.0, base.y), 0.0, 1.0);
+    let (px, py) = (base.x, sim::SLING_HEIGHT);
     let bark = rgb(140, 95, 55);
     let line = rgb(60, 36, 20);
     let arm = bez((px, 1.9), (px + 0.25, 2.4), (px + 0.45, py + 0.2), 8);
@@ -513,11 +516,12 @@ pub fn sling_front(view: &View, pig_pos: Option<V2>) {
     }
 }
 
-pub fn trajectory(view: &View, pull: V2, time: f32) {
-    let pts = Game::trajectory(pull, 26, 0.07);
+pub fn trajectory(view: &View, game: &Game, pull: V2, time: f32) {
+    let pts = game.trajectory(pull, 26, 0.07);
+    let floor = game.launcher.y.min(0.0) - 1.0;
     let march = (time * 2.0) % 1.0;
     for (i, p) in pts.iter().enumerate() {
-        if p.y < 0.0 {
+        if p.y < floor {
             break;
         }
         let fi = i as f32 + march;
@@ -542,7 +546,8 @@ pub fn trajectory(view: &View, pull: V2, time: f32) {
 pub fn queue(view: &View, game: &Game, time: f32) {
     let won = matches!(game.phase, Phase::Won { .. });
     let skip = usize::from(game.phase == Phase::Aiming);
-    let mut x = sim::POUCH.0 - 1.4;
+    let mut x = game.launcher.x - 1.4;
+    let ground = game.launcher.y;
     for (i, &k) in game.pigs_left.iter().enumerate().skip(skip) {
         let r = k.radius();
         let hop_speed = if won { 9.0 } else { 3.0 };
@@ -555,7 +560,7 @@ pub fn queue(view: &View, game: &Game, time: f32) {
             // Squash a touch on landing.
             anim.stretch = -0.06 * ((time * hop_speed + i as f32 * 1.3).sin().abs());
         }
-        art::pig(view, k, V2::new(x, r + hop), 0.0, &anim);
+        art::pig(view, k, V2::new(x, ground + r + hop), 0.0, &anim);
         x -= r * 2.0 + 0.35;
     }
 }

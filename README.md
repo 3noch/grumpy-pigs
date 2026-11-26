@@ -30,6 +30,27 @@ procedurally, so there are no asset files.
 
 12 levels, from "Straw Hut" to "Big Bad Boss".
 
+## Sharing levels
+
+Every level can be shared as a link: tap the share button while playing (or on a
+saved level's card). The whole level lives in the link itself, after the `#`, so
+there's no server and no account, and anyone can open it:
+
+```
+https://3noch.github.io/grumpy-pigs/#L1.AQlTdHJhdyBIdXQDC0dydW1weSBQaWdz…
+```
+
+Opening one shows the level with **Play** and **Save**; saved levels go to the
+**From friends** tab (stored on that device). The format (`src/share.rs`) is
+versioned and forward compatible: records with odd tags/kinds are optional and
+skipped by older games, even ones are required ("needs a newer version"), and
+every piece carries its own length so new fields can be added later. Positions
+and sizes are in centimeters; angles cover the full circle. Each level also says where
+its slingshot stands (on the ground or up on a platform).
+
+`cargo test print_codes -- --ignored --nocapture` prints the built-in levels' codes;
+`cargo run --release -- '<link>'` opens a link in the desktop build.
+
 Controls: press anywhere, pull back, release. Mouse and touch both work.
 Left-handed? The mirror button (◀|▶, on the title screen and in-game) flips the game so the
 sling is on the right and you fire to the left. The choice is remembered on that device.
@@ -98,7 +119,8 @@ Not yet built or tested on devices. These are the standard macroquad routes:
 - `src/gfx.rs`: vector toolkit: a posable "rig" (rotation + squash/stretch) and shaded, outlined mesh primitives.
 - `src/art.rs`: the animated characters. Pigs and wolves have moods (idle, aim, yell, dizzy, cheer / smug, worried, hurt, laugh), blinking, gaze tracking and squash-and-stretch.
 - `src/render.rs`: scenery, material-shaded blocks, sling, HUD helpers.
-- `src/main.rs`: menu, input, HUD, particles, end screens.
+- `src/main.rs`: input, HUD, particles, end screens; `src/menu.rs`: title screen, level tabs, shared-level card.
+- `src/share.rs`: the level link format; `src/bank.rs`: saved levels.
 - `src/platform.rs` + `web/platform.js`: fullscreen and install-as-app glue.
 
 Lints: `clippy::pedantic` is on (see `[lints.clippy]` in `Cargo.toml`); `cargo clippy --all-targets` should stay at zero warnings.
