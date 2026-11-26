@@ -167,7 +167,7 @@ fn button(rect: Rect, label: &str, input: &Input, accent: Color) -> bool {
     input.pressed.is_some_and(|p| rect.contains(p))
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Icon {
     Menu,
     Restart,
@@ -177,45 +177,132 @@ enum Icon {
     Share,
     Trash,
     Pencil,
+    Back,
+    Next,
+    Undo,
+    Redo,
+    Magnet,
+    Play,
+    Copy,
+    Paste,
+    Plus,
+    Close,
+    Check,
+    RotateLeft,
+    RotateRight,
+    Wider,
+    Narrower,
+    Taller,
+    Shorter,
+    Bigger,
+    Smaller,
 }
 
 /// Draws a rounded button with a line icon; true if tapped this frame.
 fn icon_button(rect: Rect, icon: Icon, input: &Input, accent: Color) -> bool {
     button_bg(rect, accent);
-    let c = rect.center();
-    let k = rect.h * 0.24; // icon half-size
-    let w = rect.h * 0.08; // stroke width
-    let line = |a: Vec2, b: Vec2| draw_line(a.x, a.y, b.x, b.y, w, WHITE);
+    draw_icon(icon, rect.center(), rect.h * 0.24, WHITE);
+    input.pressed.is_some_and(|p| rect.contains(p))
+}
+
+/// A button with an icon and a word, so it works for readers and
+/// non-readers alike. Narrow buttons show just the icon.
+fn icon_label_button(rect: Rect, icon: Icon, label: &str, input: &Input, accent: Color) -> bool {
+    if rect.w < rect.h * 1.7 || label.is_empty() {
+        return icon_button(rect, icon, input, accent);
+    }
+    button_bg(rect, accent);
+    let k = rect.h * 0.22;
+    let icon_c = vec2(rect.x + rect.h * 0.5, rect.center().y);
+    let text_x0 = rect.x + rect.h * 0.88;
+    let room = rect.right() - text_x0 - rect.h * 0.18;
+    let mut size = rect.h * 0.5;
+    let w = measure_text(label, None, 100, 1.0).width / 100.0;
+    if w * size > room {
+        size = (room / w.max(0.01)).max(rect.h * 0.28);
+    }
+    let tw = w * size;
+    // Center icon + text together when there's spare room.
+    let spare = (room - tw).max(0.0) / 2.0;
+    draw_icon(icon, icon_c + vec2(spare, 0.0), k, WHITE);
+    draw_text(
+        label,
+        text_x0 + spare,
+        rect.center().y + size * 0.35,
+        size,
+        WHITE,
+    );
+    input.pressed.is_some_and(|p| rect.contains(p))
+}
+
+/// An arc of radius `r` around `c` from angle `a0` sweeping `sweep` radians
+/// (screen space, y down), with an arrowhead at the end.
+fn arc_arrow(c: Vec2, r: f32, a0: f32, sweep: f32, w: f32, col: Color) {
+    let n = 18;
+    let pts: Vec<Vec2> = (0..=n)
+        .map(|i| {
+            let a = a0 + sweep * i as f32 / n as f32;
+            c + vec2(a.cos(), a.sin()) * r
+        })
+        .collect();
+    for seg in pts.windows(2) {
+        draw_line(seg[0].x, seg[0].y, seg[1].x, seg[1].y, w, col);
+    }
+    for p in &pts {
+        draw_circle(p.x, p.y, w / 2.0, col);
+    }
+    let a1 = a0 + sweep;
+    let tip = pts[n];
+    let dir = vec2(-a1.sin(), a1.cos()) * sweep.signum();
+    let side = vec2(a1.cos(), a1.sin());
+    let h = w * 2.6;
+    draw_triangle(
+        tip + dir * h,
+        tip + side * h * 0.75 - dir * h * 0.2,
+        tip - side * h * 0.75 - dir * h * 0.2,
+        col,
+    );
+}
+
+/// A straight arrow from `a` to `b` with a head at `b`.
+fn arrow(a: Vec2, b: Vec2, head: f32, w: f32, col: Color) {
+    let d = (b - a).normalize_or_zero();
+    let n = vec2(-d.y, d.x);
+    let base = b - d * head;
+    draw_line(a.x, a.y, base.x, base.y, w, col);
+    draw_triangle(b, base + n * head * 0.7, base - n * head * 0.7, col);
+}
+
+/// Draws a line icon centered on `c`, roughly `2k` across.
+#[allow(clippy::too_many_lines)]
+fn draw_icon(icon: Icon, c: Vec2, k: f32, col: Color) {
+    let w = k / 3.0; // stroke width
+    let line = |a: Vec2, b: Vec2| draw_line(a.x, a.y, b.x, b.y, w, col);
+    let rect_outline = |x0: f32, y0: f32, x1: f32, y1: f32| {
+        let (a, b) = (c + vec2(x0, y0) * k, c + vec2(x1, y1) * k);
+        draw_rectangle_lines(a.x, a.y, b.x - a.x, b.y - a.y, w, col);
+    };
     match icon {
         Icon::Menu => {
             for dy in [-0.7, 0.0, 0.7] {
                 line(c + vec2(-k, dy * k), c + vec2(k, dy * k));
             }
         }
-        Icon::Restart => {
-            // Three-quarter circle with an arrow head at its open end.
-            let pts: Vec<Vec2> = (0..=18)
-                .map(|i| {
-                    let a = -0.9 + i as f32 / 18.0 * 4.9;
-                    c + vec2(a.cos(), a.sin()) * k * 0.9
-                })
-                .collect();
-            for seg in pts.windows(2) {
-                line(seg[0], seg[1]);
-            }
-            for p in &pts {
-                draw_circle(p.x, p.y, w / 2.0, WHITE);
-            }
-            let tip = pts[pts.len() - 1];
-            draw_triangle(
-                tip + vec2(-k * 0.45, -k * 0.05),
-                tip + vec2(k * 0.35, k * 0.3),
-                tip + vec2(k * 0.1, -k * 0.55),
-                WHITE,
-            );
-        }
+        Icon::Restart => arc_arrow(c, k * 0.9, -0.9, 4.9, w, col),
+        Icon::Undo => arc_arrow(c + vec2(0.0, k * 0.3), k * 0.75, 0.3, -3.6, w, col),
+        Icon::Redo => arc_arrow(
+            c + vec2(0.0, k * 0.3),
+            k * 0.75,
+            std::f32::consts::PI - 0.3,
+            3.6,
+            w,
+            col,
+        ),
+        // In the world, + angles turn counter-clockwise.
+        Icon::RotateLeft => arc_arrow(c, k * 0.85, 0.6, -4.6, w, col),
+        Icon::RotateRight => arc_arrow(c, k * 0.85, 2.54, 4.6, w, col),
         Icon::Expand | Icon::Collapse => {
-            let inward = matches!(icon, Icon::Collapse);
+            let inward = icon == Icon::Collapse;
             for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
                 let corner = c + vec2(sx, sy) * k;
                 let arm = k * 0.55;
@@ -232,7 +319,7 @@ fn icon_button(rect: Rect, icon: Icon, input: &Input, accent: Color) -> bool {
                 };
                 line(pivot, pivot + vec2(hx, 0.0));
                 line(pivot, pivot + vec2(0.0, vy));
-                draw_circle(pivot.x, pivot.y, w / 2.0, WHITE);
+                draw_circle(pivot.x, pivot.y, w / 2.0, col);
             }
         }
         Icon::Share => {
@@ -240,12 +327,12 @@ fn icon_button(rect: Rect, icon: Icon, input: &Input, accent: Color) -> bool {
             line(c + vec2(-k * 0.8, -k * 0.05), c + vec2(-k * 0.8, k));
             line(c + vec2(-k * 0.8, k), c + vec2(k * 0.8, k));
             line(c + vec2(k * 0.8, k), c + vec2(k * 0.8, -k * 0.05));
-            line(c + vec2(0.0, k * 0.45), c + vec2(0.0, -k * 0.9));
-            draw_triangle(
+            arrow(
+                c + vec2(0.0, k * 0.45),
                 c + vec2(0.0, -k * 1.15),
-                c + vec2(-k * 0.45, -k * 0.6),
-                c + vec2(k * 0.45, -k * 0.6),
-                WHITE,
+                k * 0.55,
+                w,
+                col,
             );
         }
         Icon::Pencil => {
@@ -255,9 +342,9 @@ fn icon_button(rect: Rect, icon: Icon, input: &Input, accent: Color) -> bool {
             let tip = c + vec2(-k * 0.95, k * 0.95);
             let base = tip + d * k * 0.55;
             let end = tip + d * k * 2.5;
-            draw_triangle(tip, base + n, base - n, WHITE);
-            draw_triangle(base + n, base - n, end - n, WHITE);
-            draw_triangle(base + n, end + n, end - n, WHITE);
+            draw_triangle(tip, base + n, base - n, col);
+            draw_triangle(base + n, base - n, end - n, col);
+            draw_triangle(base + n, end + n, end - n, col);
         }
         Icon::Trash => {
             line(c + vec2(-k * 0.9, -k * 0.6), c + vec2(k * 0.9, -k * 0.6));
@@ -277,12 +364,100 @@ fn icon_button(rect: Rect, icon: Icon, input: &Input, accent: Color) -> bool {
                     c + vec2(sx * k * 1.1, 0.0),
                     c + vec2(sx * k * 0.3, -k * 0.7),
                     c + vec2(sx * k * 0.3, k * 0.7),
-                    WHITE,
+                    col,
                 );
             }
         }
+        Icon::Back => arrow(c + vec2(k, 0.0), c - vec2(k, 0.0), k * 0.8, w * 1.2, col),
+        Icon::Next => arrow(c - vec2(k, 0.0), c + vec2(k, 0.0), k * 0.8, w * 1.2, col),
+        Icon::Play => draw_triangle(
+            c + vec2(-k * 0.65, -k),
+            c + vec2(-k * 0.65, k),
+            c + vec2(k, 0.0),
+            col,
+        ),
+        Icon::Magnet => {
+            // A horseshoe magnet, open end up, with striped tips.
+            let r = k * 0.6;
+            let mid = c + vec2(0.0, k * 0.2);
+            let pts: Vec<Vec2> = (0..=12)
+                .map(|i| {
+                    let a = i as f32 / 12.0 * std::f32::consts::PI;
+                    mid + vec2(a.cos(), a.sin()) * r
+                })
+                .collect();
+            let thick = w * 1.6;
+            for seg in pts.windows(2) {
+                draw_line(seg[0].x, seg[0].y, seg[1].x, seg[1].y, thick, col);
+            }
+            for sx in [-1.0, 1.0] {
+                let x = mid.x + sx * r;
+                draw_line(x, mid.y, x, c.y - k, thick, col);
+                draw_line(
+                    x - thick * 0.6,
+                    c.y - k * 0.6,
+                    x + thick * 0.6,
+                    c.y - k * 0.6,
+                    w * 0.5,
+                    rgb(200, 77, 69),
+                );
+            }
+        }
+        Icon::Copy => {
+            rect_outline(-0.9, -0.9, 0.35, 0.35);
+            rect_outline(-0.35, -0.35, 0.9, 0.9);
+        }
+        Icon::Paste => {
+            rect_outline(-0.75, -0.75, 0.75, 1.0);
+            draw_rectangle(c.x - k * 0.35, c.y - k * 1.0, k * 0.7, k * 0.45, col);
+            for y in [0.0, 0.45] {
+                line(c + vec2(-k * 0.4, y * k), c + vec2(k * 0.4, y * k));
+            }
+        }
+        Icon::Plus => {
+            line(c - vec2(k, 0.0), c + vec2(k, 0.0));
+            line(c - vec2(0.0, k), c + vec2(0.0, k));
+        }
+        Icon::Close => {
+            line(c + vec2(-k, -k) * 0.8, c + vec2(k, k) * 0.8);
+            line(c + vec2(k, -k) * 0.8, c + vec2(-k, k) * 0.8);
+        }
+        Icon::Check => {
+            let (a, b, d) = (
+                c + vec2(-k * 0.9, 0.0),
+                c + vec2(-k * 0.25, k * 0.65),
+                c + vec2(k * 0.95, -k * 0.7),
+            );
+            draw_line(a.x, a.y, b.x, b.y, w * 1.3, col);
+            draw_line(b.x, b.y, d.x, d.y, w * 1.3, col);
+            draw_circle(b.x, b.y, w * 0.65, col);
+        }
+        Icon::Wider
+        | Icon::Narrower
+        | Icon::Taller
+        | Icon::Shorter
+        | Icon::Bigger
+        | Icon::Smaller => {
+            let axis = match icon {
+                Icon::Wider | Icon::Narrower => vec2(1.0, 0.0),
+                Icon::Taller | Icon::Shorter => vec2(0.0, 1.0),
+                _ => vec2(0.7, -0.7),
+            };
+            let out = matches!(icon, Icon::Wider | Icon::Taller | Icon::Bigger);
+            let n = vec2(-axis.y, axis.x);
+            // A bar across the middle shows the piece; arrows push or pull.
+            let bar = if out { k * 0.35 } else { k * 0.6 };
+            line(c - n * bar, c + n * bar);
+            for s in [-1.0, 1.0] {
+                let (a, b) = if out {
+                    (c + axis * s * k * 0.25, c + axis * s * k * 1.05)
+                } else {
+                    (c + axis * s * k * 1.1, c + axis * s * k * 0.25)
+                };
+                arrow(a, b, k * 0.5, w, col);
+            }
+        }
     }
-    input.pressed.is_some_and(|p| rect.contains(p))
 }
 
 /// The fullscreen toggle, when the platform supports it. True if tapped.
@@ -485,8 +660,10 @@ impl App {
         let (bw, bh) = (u * 0.22, u * 0.08);
         let ok = Rect::new(sw / 2.0 + u * 0.02, r.bottom() - bh * 1.4, bw, bh);
         let cancel = Rect::new(sw / 2.0 - u * 0.02 - bw, ok.y, bw, bh);
-        let done = button(ok, "OK", input, GREEN) || is_key_pressed(KeyCode::Enter);
-        let cancelled = button(cancel, "Cancel", input, SLATE) || is_key_pressed(KeyCode::Escape);
+        let done = icon_label_button(ok, Icon::Check, "OK", input, GREEN)
+            || is_key_pressed(KeyCode::Enter);
+        let cancelled = icon_label_button(cancel, Icon::Close, "Cancel", input, SLATE)
+            || is_key_pressed(KeyCode::Escape);
         if done {
             let t = self.typing.take().expect("typing box is open");
             self.answers.insert(t.ask, t.text);
@@ -1068,18 +1245,18 @@ impl App {
         let total = count * bw + (count - 1.0) * gap;
         let x0 = (sw - total) * 0.5;
         let slot = |i: f32| Rect::new(x0 + i * (bw + gap), by, bw, bh);
-        let back = if src == Source::Editor {
-            "Edit"
+        let (back, back_icon) = if src == Source::Editor {
+            ("Edit", Icon::Pencil)
         } else {
-            "Menu"
+            ("Menu", Icon::Menu)
         };
-        if button(slot(0.0), back, input, SLATE) {
+        if icon_label_button(slot(0.0), back_icon, back, input, SLATE) {
             Nav::Menu
-        } else if button(slot(1.0), "Retry", input, ORANGE) {
+        } else if icon_label_button(slot(1.0), Icon::Restart, "Retry", input, ORANGE) {
             Nav::Restart
-        } else if has_next && button(slot(2.0), "Next", input, GREEN) {
+        } else if has_next && icon_label_button(slot(2.0), Icon::Next, "Next", input, GREEN) {
             Nav::Next
-        } else if can_save && button(slot(2.0), "Save", input, GREEN) {
+        } else if can_save && icon_label_button(slot(2.0), Icon::Check, "Save", input, GREEN) {
             Nav::Save
         } else {
             Nav::Stay

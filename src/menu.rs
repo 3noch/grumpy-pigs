@@ -4,7 +4,8 @@
 use macroquad::prelude::*;
 
 use super::{
-    App, GREEN, Icon, Input, ORANGE, SLATE, button, icon_button, menu_corner_controls, ui_unit,
+    App, GREEN, Icon, Input, ORANGE, SLATE, button, icon_button, icon_label_button,
+    menu_corner_controls, ui_unit,
 };
 use crate::art::{self, Anim, Mood};
 use crate::bank::Shelf;
@@ -224,7 +225,7 @@ impl App {
         match self.tab {
             Tab::Levels => {}
             Tab::Mine => {
-                if button(r, "+ New", input, GREEN) {
+                if icon_label_button(r, Icon::Plus, "New", input, GREEN) {
                     return Action::NewLevel;
                 }
             }
@@ -235,7 +236,7 @@ impl App {
                     "Paste a level link",
                     "",
                 );
-                if button(r, "Paste link", input, GREEN) {
+                if icon_label_button(r, Icon::Paste, "Paste link", input, GREEN) {
                     // The web opens a prompt from the hotspot instead.
                     #[cfg(not(target_arch = "wasm32"))]
                     self.paste_link_natively();
@@ -435,7 +436,7 @@ impl App {
             }
             if let Ok(level) = level {
                 let play = Rect::new(card.x + pad, by, bh * 2.6, bh);
-                if button(play, "Play", input, ORANGE) {
+                if icon_label_button(play, Icon::Play, "Play", input, ORANGE) {
                     action = Action::Play(level.clone());
                 }
                 let share_r = Rect::new(play.right() + pad * 0.6, by, bh, bh);
@@ -459,11 +460,18 @@ impl App {
                 u * 0.035,
                 WHITE,
             );
-            if self.page > 0 && button(Rect::new(x0 - bs - gap, y, bs, bs), "<", input, SLATE) {
+            if self.page > 0
+                && icon_button(
+                    Rect::new(x0 - bs - gap, y, bs, bs),
+                    Icon::Back,
+                    input,
+                    SLATE,
+                )
+            {
                 self.page -= 1;
             }
             let right = Rect::new(x0 + cw * 3.0 + gap * 3.0, y, bs, bs);
-            if self.page + 1 < pages && button(right, ">", input, SLATE) {
+            if self.page + 1 < pages && icon_button(right, Icon::Next, input, SLATE) {
                 self.page += 1;
             }
         }
@@ -522,16 +530,22 @@ impl App {
 
                 let x0 = (sw - (bw * 3.0 + gap * 2.0)) * 0.5;
                 let slot = |i: f32| Rect::new(x0 + i * (bw + gap), by, bw, bh);
-                if button(slot(0.0), "Close", input, SLATE) {
+                if icon_label_button(slot(0.0), Icon::Close, "Close", input, SLATE) {
                     close = true;
                 }
                 let saved = incoming.saved || self.bank.contains(&share::encode(level));
                 if saved {
-                    button(slot(1.0), "Saved", input, Color::new(0.5, 0.6, 0.5, 1.0));
-                } else if button(slot(1.0), "Save", input, GREEN) {
+                    icon_label_button(
+                        slot(1.0),
+                        Icon::Check,
+                        "Saved",
+                        input,
+                        Color::new(0.5, 0.6, 0.5, 1.0),
+                    );
+                } else if icon_label_button(slot(1.0), Icon::Check, "Save", input, GREEN) {
                     action = Action::Save(level.clone());
                 }
-                if button(slot(2.0), "Play", input, ORANGE) {
+                if icon_label_button(slot(2.0), Icon::Play, "Play", input, ORANGE) {
                     action = Action::Play(level.clone());
                     close = true;
                 }

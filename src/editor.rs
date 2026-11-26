@@ -8,7 +8,10 @@ use std::f32::consts::TAU;
 
 use macroquad::prelude::*;
 
-use super::{App, Icon, Input, ORANGE, SLATE, Screen, Source, button, icon_button, ui_unit};
+use super::{
+    App, Icon, Input, ORANGE, SLATE, Screen, Source, button, button_bg, icon_button,
+    icon_label_button, ui_unit,
+};
 use crate::art::{self, Anim, Mood};
 use crate::bank::{self, Shelf};
 use crate::gfx::{rgb, rgba};
@@ -371,6 +374,80 @@ pub fn draw_piece(view: &View, p: &Piece, time: f32, seed: u32) {
             render::block(view, &Ent::preview(kind, shape, pos, p.angle, seed));
         }
     }
+}
+
+/// A button with a little picture and a word: side by side on wide buttons,
+/// the word under the picture on squarer ones.
+fn picture_button(
+    rect: Rect,
+    label: &str,
+    input: &Input,
+    accent: Color,
+    picture: impl FnOnce(Rect),
+) -> bool {
+    button_bg(rect, accent);
+    let sq = rect.h.min(rect.w);
+    let words = rect.w > rect.h * 2.0;
+    let w = measure_text(label, None, 100, 1.0).width / 100.0;
+    if words {
+        let pic = Rect::new(rect.x + sq * 0.08, rect.y, sq, sq);
+        picture(pic);
+        let x0 = pic.right() + sq * 0.08;
+        let room = rect.right() - x0 - sq * 0.12;
+        let size = (rect.h * 0.45).min(room / w.max(0.01));
+        draw_text(label, x0, rect.center().y + size * 0.35, size, WHITE);
+    } else {
+        let ph = rect.h * 0.72;
+        let pw = ph.min(rect.w);
+        picture(Rect::new(rect.center().x - pw / 2.0, rect.y, pw, ph));
+        let size = (rect.h * 0.24).min(rect.w * 0.9 / w.max(0.01));
+        render::text_centered(
+            label,
+            rect.center().x,
+            rect.bottom() - rect.h * 0.08,
+            size,
+            WHITE,
+        );
+    }
+    input.pressed.is_some_and(|p| rect.contains(p))
+}
+
+/// The picture on a palette category's tab.
+fn category_picture(cat: Category, pic: Rect, time: f32) {
+    let pic = Rect::new(
+        pic.x + pic.w * 0.1,
+        pic.y + pic.h * 0.1,
+        pic.w * 0.8,
+        pic.h * 0.8,
+    );
+    let ball = |r: f32| Size::Ball { r };
+    let p = match cat {
+        Category::Earth => piece(PieceKind::Terrain, Size::Box { w: 3.0, h: 2.0 }, 0.0),
+        Category::Blocks => piece(
+            PieceKind::Block(Material::Wood),
+            Size::Box { w: 1.0, h: 1.0 },
+            0.0,
+        ),
+        Category::Wolves => piece(PieceKind::Wolf(WolfKind::Wolf), ball(0.5), 0.0),
+        Category::Pigs => {
+            let k = PigKind::Grunt;
+            let view = View {
+                s: pic.h * 0.42 / k.radius(),
+                ox: pic.center().x,
+                oy: pic.center().y,
+                mirror: None,
+            };
+            art::pig(
+                &view,
+                k,
+                V2::ZERO,
+                0.0,
+                &Anim::new(time, 4, Mood::Idle, V2::X),
+            );
+            return;
+        }
+    };
+    draw_piece(&thumb_view(pic, &p), &p, time, 2);
 }
 
 /// A view that fits a piece (centered at the origin) inside `rect`.
@@ -862,7 +939,7 @@ impl App {
         );
 
         let mut nav = EditNav::Stay;
-        if button(next(bs * 2.2), "Back", input, SLATE) {
+        if icon_label_button(next(bs * 2.2), Icon::Back, "Back", input, SLATE) {
             nav = EditNav::Leave;
         }
         let undo_color = if ed.undo.is_empty() {
@@ -870,7 +947,7 @@ impl App {
         } else {
             SLATE
         };
-        if button(next(bs * 1.9), "Undo", input, undo_color) {
+        if icon_label_button(next(bs * 2.2), Icon::Undo, "Undo", input, undo_color) {
             ed.step_history(true);
         }
         let redo_color = if ed.redo.is_empty() {
@@ -878,11 +955,12 @@ impl App {
         } else {
             SLATE
         };
-        if button(next(bs * 1.9), "Redo", input, redo_color) {
+        if icon_label_button(next(bs * 2.2), Icon::Redo, "Redo", input, redo_color) {
             ed.step_history(false);
         }
-        if button(
-            next(bs * 1.9),
+        if icon_label_button(
+            next(bs * 2.2),
+            Icon::Magnet,
             "Snap",
             input,
             if ed.snap { ORANGE } else { SLATE },
@@ -902,7 +980,7 @@ impl App {
             r
         };
         let share_r = prev(bs);
-        let copy_r = ed.id.is_some().then(|| prev(bs * 3.4));
+        let copy_r = ed.id.is_some().then(|| prev(bs * 3.6));
         let test_r = prev(bs * 2.2);
         let right_start = rx;
 
@@ -967,7 +1045,7 @@ impl App {
             platform::activate(platform::Hotspot::Share);
         }
         if let Some(copy_r) = copy_r
-            && button(copy_r, "Save copy", input, SLATE)
+            && icon_label_button(copy_r, Icon::Copy, "Save copy", input, SLATE)
         {
             // Branch off: the current version stays as it is, and editing
             // carries on in a copy (with the same undo history).
@@ -977,7 +1055,7 @@ impl App {
             self.autosave(ed);
             self.toast("Copied - you're now editing the copy");
         }
-        if button(test_r, "Test", input, ORANGE) {
+        if icon_label_button(test_r, Icon::Play, "Test", input, ORANGE) {
             ed.selection = None;
             nav = EditNav::Test;
         }
@@ -997,12 +1075,23 @@ impl App {
             (Category::Wolves, "Wolves"),
             (Category::Pigs, "Pigs"),
         ];
-        let tw = u * 0.2;
-        let th = (r.h - pad * 5.0) / 4.0;
+        // Two columns of picture tabs.
+        let tw = u * 0.24;
+        let rows = cats.len().div_ceil(2) as f32;
+        let cw = (tw - pad) / 2.0;
+        let th = (r.h - pad * (rows + 1.0)) / rows;
         for (i, (cat, label)) in cats.iter().enumerate() {
-            let tr = Rect::new(r.x + pad, r.y + pad + i as f32 * (th + pad), tw, th);
+            let (row, col) = ((i / 2) as f32, (i % 2) as f32);
+            let tr = Rect::new(
+                r.x + pad + col * (cw + pad),
+                r.y + pad + row * (th + pad),
+                cw,
+                th,
+            );
             let color = if ed.category == *cat { ORANGE } else { SLATE };
-            if button(tr, label, input, color) {
+            if picture_button(tr, label, input, color, |pic| {
+                category_picture(*cat, pic, self.time);
+            }) {
                 ed.category = *cat;
             }
         }
@@ -1020,7 +1109,11 @@ impl App {
             for (i, (m, label)) in MATERIALS.iter().enumerate() {
                 let cr = Rect::new(x0 + i as f32 * (u * 0.15 + pad), r.y + pad, u * 0.15, ch);
                 let color = if ed.material == *m { ORANGE } else { SLATE };
-                if button(cr, label, input, color) {
+                let m_ = *m;
+                if picture_button(cr, label, input, color, |pic| {
+                    let p = piece(PieceKind::Block(m_), Size::Box { w: 1.0, h: 1.0 }, 0.0);
+                    draw_piece(&thumb_view(pic, &p), &p, 0.0, 5);
+                }) {
                     ed.material = *m;
                     // Also restyle the selected block.
                     if let Some(i) = ed.selected_piece()
@@ -1172,10 +1265,10 @@ impl App {
         }
         let Some(i) = ed.selected_piece() else { return };
         let round = matches!(ed.level.pieces[i].size, Size::Ball { .. });
-        if button(next(), "Rotate -", input, SLATE) {
+        if icon_label_button(next(), Icon::RotateRight, "Turn", input, SLATE) {
             ed.edit_selected(|p| p.angle -= ANGLE_STEP);
         }
-        if button(next(), "Rotate +", input, SLATE) {
+        if icon_label_button(next(), Icon::RotateLeft, "Turn", input, SLATE) {
             ed.edit_selected(|p| p.angle += ANGLE_STEP);
         }
         let grow = |dw: f32, dh: f32| {
@@ -1192,27 +1285,27 @@ impl App {
             }
         };
         if round {
-            if button(next(), "Bigger", input, SLATE) {
+            if icon_label_button(next(), Icon::Bigger, "Bigger", input, SLATE) {
                 ed.edit_selected(grow(SIZE_STEP, 0.0));
             }
-            if button(next(), "Smaller", input, SLATE) {
+            if icon_label_button(next(), Icon::Smaller, "Smaller", input, SLATE) {
                 ed.edit_selected(grow(-SIZE_STEP, 0.0));
             }
         } else {
-            if button(next(), "Wider", input, SLATE) {
+            if icon_label_button(next(), Icon::Wider, "Wider", input, SLATE) {
                 ed.edit_selected(grow(SIZE_STEP, 0.0));
             }
-            if button(next(), "Narrower", input, SLATE) {
+            if icon_label_button(next(), Icon::Narrower, "Narrower", input, SLATE) {
                 ed.edit_selected(grow(-SIZE_STEP, 0.0));
             }
-            if button(next(), "Taller", input, SLATE) {
+            if icon_label_button(next(), Icon::Taller, "Taller", input, SLATE) {
                 ed.edit_selected(grow(0.0, SIZE_STEP));
             }
-            if button(next(), "Shorter", input, SLATE) {
+            if icon_label_button(next(), Icon::Shorter, "Shorter", input, SLATE) {
                 ed.edit_selected(grow(0.0, -SIZE_STEP));
             }
         }
-        if button(next(), "Copy", input, SLATE) {
+        if icon_label_button(next(), Icon::Copy, "Copy", input, SLATE) {
             ed.checkpoint();
             let mut p = ed.level.pieces[i];
             p.x += 1.0;
@@ -1223,7 +1316,7 @@ impl App {
             ed.selection = Some(Selection::Piece(ed.level.pieces.len() - 1));
             ed.rebuild(true);
         }
-        if button(next(), "Delete", input, rgb(200, 77, 69)) {
+        if icon_label_button(next(), Icon::Trash, "Delete", input, rgb(200, 77, 69)) {
             ed.checkpoint();
             ed.level.pieces.remove(i);
             ed.selection = None;
