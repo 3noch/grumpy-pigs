@@ -31,6 +31,18 @@ python3 -m http.server -d dist 8000   # then open http://localhost:8000
 
 `dist/` is static files, so it can be hosted anywhere (GitHub Pages, Netlify, itch.io).
 
+## Publish to GitHub Pages
+
+`.github/workflows/pages.yml` checks formatting, runs pedantic clippy and the tests, builds
+the web version and deploys it on every push to `main`. One-time setup:
+
+1. Create an empty repo on GitHub and push: `git remote add origin git@github.com:<you>/grumpy-pigs.git && git push -u origin main`
+2. In the repo: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+3. Re-run the workflow from the **Actions** tab, or push again. The game appears at
+   `https://<you>.github.io/grumpy-pigs/`.
+
+Pages sites are public even when the repo is private (private-repo Pages needs a paid plan).
+
 ## Mobile
 
 Not yet built or tested on devices. These are the standard macroquad routes:

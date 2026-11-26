@@ -9,12 +9,32 @@
   <title>Grumpy Pigs</title>
   <style>
     html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #6eb4eb; }
-    canvas { display: block; width: 100vw; height: 100vh; height: 100dvh; touch-action: none; outline: none; }
+    canvas { display: block; width: 100vw; height: 100vh; height: 100dvh; touch-action: none; outline: none; -webkit-tap-highlight-color: transparent; }
+    [hidden] { display: none !important; }
+    #status { position: fixed; inset: 0; display: grid; place-items: center; padding: 0 24px; text-align: center; color: #fff; font: 600 18px/1.4 system-ui, sans-serif; pointer-events: none; }
   </style>
 </head>
 <body>
   <canvas id="glcanvas" tabindex="1"></canvas>
+  <div id="status">Loading Grumpy Pigs…</div>
   <script src="mq_js_bundle.js"></script>
-  <script>load("grumpy-pigs.wasm");</script>
+  <script>
+    (function () {
+      var status = document.getElementById("status");
+      // Hide the loading note once the game has drawn a few frames.
+      var raf = window.requestAnimationFrame.bind(window), frames = 0;
+      window.requestAnimationFrame = function (cb) {
+        if (++frames === 3) status.hidden = true;
+        return raf(cb);
+      };
+      function fail(msg) {
+        status.hidden = false;
+        status.textContent = "The game couldn't start: " + (msg || "unknown error");
+      }
+      window.addEventListener("error", function (e) { fail(e.message); });
+      window.addEventListener("unhandledrejection", function (e) { fail(e.reason && e.reason.message || String(e.reason)); });
+      load("grumpy-pigs.wasm");
+    })();
+  </script>
 </body>
 </html>
