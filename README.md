@@ -170,3 +170,11 @@ Dev aids (desktop build, environment variables):
   (frame:press/move/release:x:y in screen points), e.g. to test editor drags.
 - `GRUMPY_MIRROR=1`, `GRUMPY_TAB=mine|friends`, `GRUMPY_LAUNCHER=x,y`.
 - Set `HOME` to a scratch folder to keep test runs out of your real `~/.grumpy-pigs`.
+
+## License
+
+Grumpy Pigs is free to play, copy, change and share for any **noncommercial** purpose
+(personal use, hobby projects, study, schools, charities), under the
+[PolyForm Noncommercial License 1.0.0](LICENSE.md). You may not sell it or anything
+made from it. The libraries it uses (macroquad, rapier and their dependencies) keep
+their own licenses.
