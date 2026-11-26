@@ -1,8 +1,13 @@
-//! All drawing. Everything is procedural shapes — no image assets.
+//! Scene drawing: camera, scenery, blocks, sling, HUD helpers.
+//! Characters live in `art`, primitives in `gfx`.
+
+use std::f32::consts::FRAC_PI_2;
 
 use macroquad::prelude::*;
 
-use crate::sim::{self, Ent, Game, Kind, Material, Phase, PigKind, Shape, V2};
+use crate::art::{self, Anim, Mood};
+use crate::gfx::{P, Rig, alpha, bez, hash, mix, rgb, rgba};
+use crate::sim::{self, Ent, Game, Kind, Material, Phase, Shape, V2};
 
 /// Maps world meters (y up) to screen pixels (y down).
 #[derive(Clone, Copy)]
@@ -32,66 +37,17 @@ impl View {
     pub fn v(&self, v: V2) -> Vec2 {
         self.p(v.x, v.y)
     }
-}
-
-/// Local frame of a rotated body, for drawing details in body space.
-struct Local {
-    view: View,
-    c: V2,
-    cos: f32,
-    sin: f32,
-}
-
-impl Local {
-    fn new(view: View, c: V2, angle: f32) -> Self {
-        Local {
-            view,
-            c,
-            cos: angle.cos(),
-            sin: angle.sin(),
-        }
+    /// Leftmost / rightmost visible world x.
+    pub fn x_range(&self) -> (f32, f32) {
+        (-self.ox / self.s, (screen_width() - self.ox) / self.s)
     }
-    fn p(&self, x: f32, y: f32) -> Vec2 {
-        let wx = self.c.x + x * self.cos - y * self.sin;
-        let wy = self.c.y + x * self.sin + y * self.cos;
-        self.view.p(wx, wy)
-    }
-    fn line(&self, a: (f32, f32), b: (f32, f32), w: f32, col: Color) {
-        let (pa, pb) = (self.p(a.0, a.1), self.p(b.0, b.1));
-        draw_line(pa.x, pa.y, pb.x, pb.y, w * self.view.s, col);
-    }
-    fn circle(&self, x: f32, y: f32, r: f32, col: Color) {
-        let p = self.p(x, y);
-        draw_circle(p.x, p.y, r * self.view.s, col);
-    }
-    fn tri(&self, a: (f32, f32), b: (f32, f32), c: (f32, f32), col: Color) {
-        draw_triangle(self.p(a.0, a.1), self.p(b.0, b.1), self.p(c.0, c.1), col);
-    }
-    fn ellipse(&self, x: f32, y: f32, rx: f32, ry: f32, col: Color) {
-        let p = self.p(x, y);
-        let deg = -self.sin.atan2(self.cos).to_degrees();
-        draw_ellipse(p.x, p.y, rx * self.view.s, ry * self.view.s, deg, col);
-    }
-}
-
-fn rgb(r: u8, g: u8, b: u8) -> Color {
-    Color::from_rgba(r, g, b, 255)
-}
-
-fn mix(a: Color, b: Color, t: f32) -> Color {
-    Color::new(
-        a.r + (b.r - a.r) * t,
-        a.g + (b.g - a.g) * t,
-        a.b + (b.b - a.b) * t,
-        a.a + (b.a - a.a) * t,
-    )
 }
 
 pub fn background(view: &View, time: f32) {
     let (sw, sh) = (screen_width(), screen_height());
-    let top = rgb(110, 180, 235);
-    let bottom = rgb(205, 235, 250);
-    let strips = 24;
+    let top = rgb(98, 170, 232);
+    let bottom = rgb(214, 238, 250);
+    let strips = 32;
     for i in 0..strips {
         let t = i as f32 / strips as f32;
         draw_rectangle(
@@ -102,408 +58,399 @@ pub fn background(view: &View, time: f32) {
             mix(top, bottom, t),
         );
     }
-    // Sun
     let sun = view.p(36.0, 17.0);
-    draw_circle(sun.x, sun.y, 2.2 * view.s, Color::new(1.0, 0.95, 0.7, 0.5));
-    draw_circle(sun.x, sun.y, 1.6 * view.s, rgb(255, 240, 170));
+    for (r, a) in [(3.2, 0.12), (2.4, 0.2), (1.9, 0.35)] {
+        draw_circle(sun.x, sun.y, r * view.s, rgba(255, 245, 200, a));
+    }
+    draw_circle(sun.x, sun.y, 1.5 * view.s, rgb(255, 242, 180));
 
-    // Clouds drifting
+    // Clouds with a soft underside.
     for (i, (y, sz, speed)) in [(15.0, 1.0, 0.3), (12.5, 0.7, 0.5), (17.5, 1.3, 0.2)]
         .iter()
         .enumerate()
     {
         let span = VIEW_W + 12.0;
         let x = ((i as f32 * 17.0 + time * speed) % span) - 6.0;
-        let c = Color::new(1.0, 1.0, 1.0, 0.9);
-        for (dx, dy, r) in [
+        let puffs = [
             (0.0, 0.0, 1.0),
-            (1.1, 0.3, 1.2),
-            (2.3, 0.0, 0.9),
-            (1.1, -0.3, 0.9),
-        ] {
+            (1.1, 0.35, 1.25),
+            (2.3, 0.0, 0.95),
+            (1.2, -0.25, 1.0),
+        ];
+        for (dx, dy, r) in puffs {
+            let p = view.p(x + dx * sz, y + (dy - 0.12) * sz);
+            draw_circle(p.x, p.y, r * sz * view.s, rgba(190, 210, 235, 0.9));
+        }
+        for (dx, dy, r) in puffs {
             let p = view.p(x + dx * sz, y + dy * sz);
-            draw_circle(p.x, p.y, r * sz * view.s, c);
+            draw_circle(p.x, p.y, r * sz * view.s * 0.94, rgba(255, 255, 255, 0.97));
         }
     }
 
-    // Rolling hills
-    let far = rgb(140, 200, 130);
-    let near = rgb(110, 180, 100);
-    for (i, &(x, r)) in [(-2.0, 9.0), (12.0, 11.0), (28.0, 8.0), (42.0, 12.0)]
-        .iter()
-        .enumerate()
-    {
+    // Rolling hills, far then near, with a few round trees.
+    let far = rgb(150, 205, 140);
+    let near = rgb(116, 184, 104);
+    for &(x, r) in &[(-2.0, 9.0), (28.0, 8.0)] {
         let p = view.p(x, -r * 0.55);
-        draw_circle(p.x, p.y, r * view.s, if i % 2 == 0 { far } else { near });
+        draw_circle(p.x, p.y, r * view.s, far);
+    }
+    for &(x, h, s) in &[(1.0, 3.2, 1.0), (27.5, 2.8, 0.8), (31.0, 3.0, 0.9)] {
+        tree(view, x, h, s, time);
+    }
+    for &(x, r) in &[(12.0, 11.0), (42.0, 12.0)] {
+        let p = view.p(x, -r * 0.55);
+        draw_circle(p.x, p.y, r * view.s, near);
     }
 
-    // Ground
+    // Ground: grass lip, soil with pebbles.
     let g = view.p(0.0, 0.0);
-    draw_rectangle(0.0, g.y, sw, sh - g.y + 1.0, rgb(122, 86, 58));
-    draw_rectangle(0.0, g.y, sw, 0.35 * view.s, rgb(96, 168, 72));
-    draw_rectangle(
-        0.0,
-        g.y + 0.35 * view.s,
-        sw,
-        0.12 * view.s,
-        rgb(78, 140, 60),
-    );
+    draw_rectangle(0.0, g.y, sw, sh - g.y + 1.0, rgb(126, 88, 58));
+    let (x0, x1) = view.x_range();
+    let mut x = x0.floor();
+    while x < x1 {
+        let k = hash(x.to_bits(), 5);
+        let p = view.p(x + k, -0.6 - k * 0.7);
+        draw_ellipse(
+            p.x,
+            p.y,
+            (0.12 + k * 0.1) * view.s,
+            0.07 * view.s,
+            0.0,
+            rgb(104, 72, 48),
+        );
+        x += 1.3;
+    }
+    draw_rectangle(0.0, g.y, sw, 0.38 * view.s, rgb(98, 172, 74));
+    draw_rectangle(0.0, g.y + 0.38 * view.s, sw, 0.1 * view.s, rgb(74, 136, 56));
 }
 
-fn material_colors(m: Material) -> (Color, Color) {
-    match m {
-        Material::Straw => (rgb(236, 205, 110), rgb(190, 150, 60)),
-        Material::Wood => (rgb(180, 120, 70), rgb(110, 70, 40)),
-        Material::Brick => (rgb(178, 82, 64), rgb(110, 50, 40)),
+fn tree(view: &View, x: f32, h: f32, s: f32, time: f32) {
+    let sway = (time * 0.8 + x).sin() * 0.06;
+    let base = view.p(x, 0.0);
+    let top = view.p(x + sway, h * s);
+    draw_line(
+        base.x,
+        base.y,
+        top.x,
+        top.y,
+        0.35 * s * view.s,
+        rgb(110, 82, 60),
+    );
+    let leaf_dark = rgb(70, 140, 70);
+    let leaf = rgb(92, 168, 84);
+    for (dx, dy, r) in [(-0.6, 0.0, 0.9), (0.6, 0.1, 0.85), (0.0, 0.7, 1.0)] {
+        let p = view.p(x + sway + dx * s, h * s + dy * s);
+        draw_circle(p.x, p.y, r * s * view.s, leaf_dark);
+    }
+    for (dx, dy, r) in [(-0.6, 0.05, 0.75), (0.6, 0.15, 0.7), (0.0, 0.78, 0.85)] {
+        let p = view.p(x + sway + dx * s - 0.1, h * s + dy * s + 0.1);
+        draw_circle(p.x, p.y, r * s * view.s, leaf);
     }
 }
 
+/// Swaying grass tufts drawn in front of the scene.
+pub fn grass(view: &View, time: f32) {
+    let (x0, x1) = view.x_range();
+    let mut x = x0.floor();
+    let col = rgb(84, 158, 64);
+    let tip = rgb(130, 200, 96);
+    while x < x1 {
+        let k = hash(x.to_bits(), 3);
+        if k > 0.35 {
+            let bx = x + k * 0.6;
+            for b in 0..3 {
+                let off = (b as f32 - 1.0) * 0.12;
+                let h = 0.35 + 0.2 * hash(x.to_bits(), b + 10);
+                let sway = (time * 1.6 + bx * 0.7).sin() * 0.1 + off * 0.8;
+                let a = view.p(bx + off - 0.05, 0.25);
+                let c = view.p(bx + off + 0.05, 0.25);
+                let t = view.p(bx + off + sway, 0.25 + h);
+                draw_triangle(a, c, t, mix(col, tip, hash(x.to_bits(), b)));
+            }
+        }
+        x += 0.9;
+    }
+}
+
+fn material_colors(m: Material) -> (Color, Color, Color) {
+    // (light, base, line)
+    match m {
+        Material::Straw => (rgb(250, 226, 140), rgb(228, 188, 92), rgb(150, 110, 40)),
+        Material::Wood => (rgb(208, 150, 96), rgb(170, 110, 62), rgb(92, 56, 30)),
+        Material::Brick => (rgb(206, 108, 86), rgb(168, 74, 58), rgb(92, 40, 32)),
+    }
+}
+
+/// A rig whose local x axis runs along the block's long side, in world units.
+fn block_rig(view: &View, e: &Ent, hw: f32, hh: f32) -> (Rig, f32, f32) {
+    if hw >= hh {
+        (Rig::new(*view, e.pos, e.angle, 1.0), hw, hh)
+    } else {
+        (Rig::new(*view, e.pos, e.angle + FRAC_PI_2, 1.0), hh, hw)
+    }
+}
+
+fn rect_pts(x0: f32, y0: f32, x1: f32, y1: f32) -> [P; 4] {
+    [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+}
+
+#[allow(clippy::too_many_lines)]
 pub fn block(view: &View, e: &Ent) {
     let Shape::Box { hw, hh } = e.shape else {
         return;
     };
-    let l = Local::new(*view, e.pos, e.angle);
-    let (fill, dark) = match e.kind {
-        Kind::Block(m) => material_colors(m),
-        _ => (rgb(130, 125, 120), rgb(90, 85, 80)),
-    };
-    let fill = mix(fill, WHITE, e.hurt_flash * 0.35);
-    let c = view.v(e.pos);
-    draw_rectangle_ex(
-        c.x,
-        c.y,
-        hw * 2.0 * view.s,
-        hh * 2.0 * view.s,
-        DrawRectangleParams {
-            offset: vec2(0.5, 0.5),
-            rotation: -e.angle,
-            color: fill,
-        },
-    );
+    if e.kind == Kind::Rock {
+        rock(view, e, hw, hh);
+        return;
+    }
+    let Kind::Block(mat) = e.kind else { return };
+    let (rig, l, w) = block_rig(view, e, hw, hh);
+    let (light, base, line) = material_colors(mat);
+    let flash = e.hurt_flash * 0.4;
+    let light = mix(light, WHITE, flash);
+    let base = mix(base, WHITE, flash);
+    let seed = e.seed;
 
-    // Surface detail, laid out along the long axis.
-    let long_x = hw >= hh;
-    let thin = 0.04;
-    match e.kind {
-        Kind::Block(Material::Straw) => {
-            let n = ((if long_x { hh } else { hw }) * 2.0 / 0.13) as i32;
+    match mat {
+        Material::Straw => {
+            // Frayed ends poke out past the bundle.
+            for end in [-1.0f32, 1.0] {
+                for i in 0..6 {
+                    let y = -w + (i as f32 + 0.5) / 6.0 * 2.0 * w;
+                    let len = 0.06 + 0.08 * hash(seed, i + if end > 0.0 { 20 } else { 40 });
+                    rig.stroke(
+                        &[(end * (l - 0.02), y), (end * (l + len), y + 0.02)],
+                        0.03,
+                        line,
+                    );
+                }
+            }
+            rig.poly(&rect_pts(-l, -w, l, w), base, Some((line, 0.03)));
+            rig.rect_grad(-l, -w, l, w, light, base);
+            let n = crate::gfx::count((w * 2.0) / 0.07, 64).max(2);
             for i in 1..n {
-                let f = -1.0 + 2.0 * i as f32 / n as f32;
-                if long_x {
-                    l.line((-hw, f * hh), (hw, f * hh), thin, dark);
-                } else {
-                    l.line((f * hw, -hh), (f * hw, hh), thin, dark);
-                }
+                let y = -w + i as f32 / n as f32 * 2.0 * w;
+                let shade = mix(line, base, 0.35 + 0.4 * hash(seed, i));
+                rig.stroke(&[(-l, y), (l, y)], 0.018, alpha(shade, 0.8));
+            }
+            // Twine ties
+            for f in [-0.55, 0.55] {
+                let x = f * l;
+                rig.poly(
+                    &rect_pts(x - 0.06, -w, x + 0.06, w),
+                    rgb(170, 120, 60),
+                    Some((line, 0.015)),
+                );
             }
         }
-        Kind::Block(Material::Wood) => {
-            for f in [-0.4, 0.15, 0.55] {
-                if long_x {
-                    l.line((-hw * 0.9, f * hh), (hw * 0.7, f * hh), thin, dark);
-                } else {
-                    l.line((f * hw, -hh * 0.9), (f * hw, hh * 0.7), thin, dark);
-                }
+        Material::Wood => {
+            rig.poly(&rect_pts(-l, -w, l, w), base, Some((line, 0.035)));
+            rig.rect_grad(-l, -w, l, w, light, base);
+            // Wavy grain
+            for (i, f) in (0u32..).zip([-0.5f32, 0.05, 0.55]) {
+                let ph = hash(seed, i) * 6.0;
+                let pts: Vec<P> = (0..=16)
+                    .map(|k| {
+                        let x = -l * 0.92 + k as f32 / 16.0 * l * 1.84;
+                        (x, f * w + 0.04 * w * (x * 3.0 + ph).sin())
+                    })
+                    .collect();
+                rig.stroke(&pts, 0.022, alpha(line, 0.55));
             }
+            // Knot
+            let kx = (hash(seed, 7) - 0.5) * l;
+            rig.ellipse(kx, 0.0, 0.11, w * 0.32, 0.0, alpha(line, 0.5));
+            rig.ellipse(kx, 0.0, 0.05, w * 0.14, 0.0, alpha(line, 0.7));
+            // Nails
+            for end in [-1.0, 1.0] {
+                rig.circle(end * (l - 0.12), 0.0, 0.035, rgb(120, 120, 130));
+            }
+            rig.stroke(
+                &[(-l + 0.03, w - 0.03), (l - 0.03, w - 0.03)],
+                0.025,
+                alpha(WHITE, 0.25),
+            );
         }
-        Kind::Block(Material::Brick) => {
-            let (bw, bh) = (0.5, 0.25);
-            let (ax, ay) = if long_x { (hw, hh) } else { (hh, hw) };
-            let rows = ((ay * 2.0) / bh).round().max(1.0) as i32;
+        Material::Brick => {
+            rig.poly(
+                &rect_pts(-l, -w, l, w),
+                rgb(196, 176, 150),
+                Some((line, 0.035)),
+            );
+            let rows = crate::gfx::count(((w * 2.0) / 0.25).round(), 64).max(1);
+            let rh = w * 2.0 / rows as f32;
+            let bw = 0.5;
             for r in 0..rows {
-                let y0 = -ay + r as f32 * (ay * 2.0 / rows as f32);
-                if r > 0 {
-                    let (a, b) = ((-ax, y0), (ax, y0));
-                    if long_x {
-                        l.line(a, b, thin, dark)
-                    } else {
-                        l.line((a.1, a.0), (b.1, b.0), thin, dark)
-                    }
-                }
-                let off = if r % 2 == 0 { 0.0 } else { bw / 2.0 };
-                let mut x = -ax + off + bw;
-                let y1 = y0 + ay * 2.0 / rows as f32;
-                while x < ax - 0.05 {
-                    let (a, b) = ((x, y0), (x, y1));
-                    if long_x {
-                        l.line(a, b, thin, dark)
-                    } else {
-                        l.line((a.1, a.0), (b.1, b.0), thin, dark)
+                let y0 = -w + r as f32 * rh;
+                let off = if r % 2 == 0 { 0.0 } else { -bw / 2.0 };
+                let mut x = -l + off;
+                let mut k = 0;
+                while x < l {
+                    let (a, b) = (x.max(-l) + 0.025, (x + bw).min(l) - 0.025);
+                    if b > a {
+                        let v = hash(seed, r * 31 + k);
+                        let c = mix(base, light, v * 0.5);
+                        rig.rect_grad(a, y0 + 0.025, b, y0 + rh - 0.025, mix(c, WHITE, 0.08), c);
                     }
                     x += bw;
+                    k += 1;
                 }
             }
         }
-        _ => {}
     }
 
     // Cracks as it takes damage.
     let frac = e.hp_frac();
     if frac < 0.7 {
         let cracks = if frac < 0.35 { 3 } else { 1 };
-        let mut s = e.seed;
-        let mut rnd = || {
-            s ^= s << 13;
-            s ^= s >> 17;
-            s ^= s << 5;
-            (s % 1000) as f32 / 1000.0
-        };
-        for _ in 0..cracks {
-            let mut p = (hw * (rnd() * 1.6 - 0.8), hh * (rnd() * 1.6 - 0.8));
-            for _ in 0..3 {
-                let q = (
-                    (p.0 + (rnd() - 0.5) * 0.6).clamp(-hw, hw),
-                    (p.1 + (rnd() - 0.5) * 0.6).clamp(-hh, hh),
+        for c in 0..cracks {
+            let mut p = (
+                l * (hash(seed, 100 + c) * 1.6 - 0.8),
+                w * (hash(seed, 110 + c) * 1.6 - 0.8),
+            );
+            let mut pts = vec![p];
+            for s in 0..4 {
+                p = (
+                    (p.0 + (hash(seed, 120 + c * 7 + s) - 0.5) * 0.5).clamp(-l, l),
+                    (p.1 + (hash(seed, 140 + c * 7 + s) - 0.5) * 0.5).clamp(-w, w),
                 );
-                l.line(p, q, 0.05, Color::new(0.1, 0.05, 0.0, 0.8));
-                p = q;
+                pts.push(p);
             }
+            rig.stroke(&pts, 0.045, rgba(40, 20, 10, 0.75));
         }
-    }
-
-    // Outline
-    let corners = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)];
-    for i in 0..4 {
-        l.line(corners[i], corners[(i + 1) % 4], 0.06, dark);
     }
 }
 
-pub fn pig_colors(kind: PigKind) -> (Color, Color) {
-    match kind {
-        PigKind::Grunt => (rgb(247, 160, 180), rgb(220, 110, 140)),
-        PigKind::Dasher => (rgb(255, 196, 90), rgb(220, 140, 50)),
-        PigKind::Boomer => (rgb(95, 85, 110), rgb(60, 52, 72)),
-        PigKind::Hog => (rgb(160, 105, 75), rgb(115, 72, 50)),
-    }
-}
-
-/// A furious pig. Drawn in its own rotated frame.
-pub fn pig(view: &View, kind: PigKind, pos: V2, angle: f32, time: f32) {
-    let r = kind.radius();
-    let l = Local::new(*view, pos, angle);
-    let (body, dark) = pig_colors(kind);
-    let outline = Color::new(0.0, 0.0, 0.0, 0.35);
-
-    // Ears
-    for sx in [-1.0, 1.0] {
-        l.tri(
-            (sx * 0.25 * r, 0.85 * r),
-            (sx * 0.85 * r, 0.6 * r),
-            (sx * 0.75 * r, 1.15 * r),
-            dark,
-        );
-    }
-    l.circle(0.0, 0.0, r * 1.06, outline);
-    l.circle(0.0, 0.0, r, body);
-    // Belly highlight
-    l.circle(
-        -0.3 * r,
-        0.35 * r,
-        0.25 * r,
-        Color::new(1.0, 1.0, 1.0, 0.18),
+fn rock(view: &View, e: &Ent, hw: f32, hh: f32) {
+    let rig = Rig::new(*view, e.pos, e.angle, 1.0);
+    let line = rgb(70, 50, 36);
+    rig.poly(
+        &rect_pts(-hw, -hh, hw, hh),
+        rgb(140, 102, 72),
+        Some((line, 0.05)),
     );
-
-    // Eyes
-    for sx in [-1.0, 1.0] {
-        l.circle(sx * 0.33 * r, 0.22 * r, 0.2 * r, WHITE);
-        l.circle(sx * 0.28 * r, 0.18 * r, 0.1 * r, BLACK);
-    }
-    // Furious brows, sloping down toward the middle.
-    for sx in [-1.0, 1.0] {
-        l.line(
-            (sx * 0.6 * r, 0.55 * r),
-            (sx * 0.1 * r, 0.35 * r),
-            0.13 * r,
-            rgb(60, 30, 30),
+    rig.rect_grad(-hw, -hh, hw, hh, rgb(150, 112, 80), rgb(112, 78, 54));
+    for i in 0..14 {
+        let x = (hash(e.seed, i) * 2.0 - 1.0) * (hw - 0.4);
+        let y = (hash(e.seed, i + 50) * 2.0 - 1.0) * (hh - 0.4);
+        let r = 0.15 + hash(e.seed, i + 99) * 0.25;
+        rig.blob(
+            x,
+            y,
+            r,
+            r * 0.7,
+            0.0,
+            rgb(176, 170, 160),
+            rgb(120, 114, 108),
+            Some((line, 0.03)),
         );
     }
-    // Snout
-    l.ellipse(0.0, -0.22 * r, 0.38 * r, 0.26 * r, dark);
-    l.circle(-0.13 * r, -0.22 * r, 0.07 * r, rgb(80, 30, 40));
-    l.circle(0.13 * r, -0.22 * r, 0.07 * r, rgb(80, 30, 40));
-    // Frown
-    l.line(
-        (-0.28 * r, -0.62 * r),
-        (0.0, -0.52 * r),
-        0.06 * r,
-        rgb(80, 30, 40),
-    );
-    l.line(
-        (0.0, -0.52 * r),
-        (0.28 * r, -0.62 * r),
-        0.06 * r,
-        rgb(80, 30, 40),
-    );
-
-    match kind {
-        PigKind::Hog => {
-            for sx in [-1.0, 1.0] {
-                l.tri(
-                    (sx * 0.3 * r, -0.45 * r),
-                    (sx * 0.42 * r, -0.4 * r),
-                    (sx * 0.46 * r, -0.05 * r),
-                    rgb(250, 245, 225),
-                );
-            }
-        }
-        PigKind::Boomer => {
-            // Fuse on top with a flickering spark.
-            l.line(
-                (0.0, 0.95 * r),
-                (0.2 * r, 1.35 * r),
-                0.07 * r,
-                rgb(60, 50, 40),
-            );
-            let flick = 0.12 + 0.05 * (time * 30.0).sin();
-            l.circle(0.2 * r, 1.4 * r, flick * r * 1.6, rgb(255, 200, 60));
-            l.circle(0.2 * r, 1.4 * r, flick * r * 0.8, rgb(255, 255, 220));
-        }
-        PigKind::Dasher => {
-            // Headband with trailing tails
-            l.line(
-                (-0.92 * r, 0.42 * r),
-                (0.92 * r, 0.42 * r),
-                0.14 * r,
-                rgb(220, 40, 40),
-            );
-            l.line(
-                (-0.92 * r, 0.42 * r),
-                (-1.35 * r, 0.25 * r),
-                0.1 * r,
-                rgb(220, 40, 40),
-            );
-            l.line(
-                (-0.92 * r, 0.42 * r),
-                (-1.3 * r, 0.55 * r),
-                0.1 * r,
-                rgb(220, 40, 40),
-            );
-        }
-        PigKind::Grunt => {}
-    }
-}
-
-/// A smug wolf. Gets visibly worried as it takes damage.
-pub fn wolf(view: &View, e: &Ent) {
-    let Shape::Ball { r } = e.shape else { return };
-    let l = Local::new(*view, e.pos, e.angle);
-    let fur = mix(rgb(140, 145, 160), rgb(230, 120, 120), e.hurt_flash * 0.6);
-    let dark = rgb(90, 92, 108);
-    let light = rgb(220, 222, 230);
-
-    for sx in [-1.0, 1.0] {
-        l.tri(
-            (sx * 0.2 * r, 0.8 * r),
-            (sx * 0.8 * r, 0.5 * r),
-            (sx * 0.7 * r, 1.35 * r),
-            dark,
-        );
-        l.tri(
-            (sx * 0.35 * r, 0.8 * r),
-            (sx * 0.7 * r, 0.62 * r),
-            (sx * 0.65 * r, 1.12 * r),
-            rgb(220, 160, 170),
-        );
-    }
-    l.circle(0.0, 0.0, r * 1.05, Color::new(0.0, 0.0, 0.0, 0.35));
-    l.circle(0.0, 0.0, r, fur);
-    // Muzzle
-    l.ellipse(0.0, -0.3 * r, 0.5 * r, 0.35 * r, light);
-    l.circle(0.0, -0.12 * r, 0.13 * r, rgb(30, 30, 35));
-
-    // Eyes: half-lidded and smug when healthy, wide when hurt.
-    let worried = e.hp_frac() < 0.6;
-    for sx in [-1.0, 1.0] {
-        let (ex, ey) = (sx * 0.34 * r, 0.28 * r);
-        l.circle(ex, ey, 0.17 * r, rgb(255, 240, 150));
-        l.circle(ex + 0.03 * r, ey, 0.08 * r, BLACK);
-        if !worried {
-            // Heavy upper eyelid
-            l.ellipse(ex, ey + 0.1 * r, 0.2 * r, 0.11 * r, fur);
-            l.line(
-                (ex - 0.2 * r, ey + 0.03 * r),
-                (ex + 0.2 * r, ey + 0.03 * r),
-                0.04 * r,
-                dark,
-            );
-        }
-    }
-    if worried {
-        // Sweat drop
-        l.circle(0.75 * r, 0.45 * r, 0.1 * r, rgb(120, 190, 255));
-        // Wobbly mouth
-        l.line((-0.25 * r, -0.5 * r), (0.25 * r, -0.5 * r), 0.05 * r, dark);
-    } else {
-        // Smirk: lopsided line with a fang
-        l.line((-0.3 * r, -0.45 * r), (0.1 * r, -0.5 * r), 0.05 * r, dark);
-        l.line((0.1 * r, -0.5 * r), (0.35 * r, -0.36 * r), 0.05 * r, dark);
-        l.tri(
-            (0.12 * r, -0.5 * r),
-            (0.22 * r, -0.47 * r),
-            (0.17 * r, -0.62 * r),
-            WHITE,
-        );
-    }
+    rig.rect_grad(-hw, hh - 0.35, hw, hh, rgb(118, 190, 88), rgb(84, 156, 62));
 }
 
 pub fn sling_back(view: &View, pig_pos: Option<V2>) {
-    let wood = rgb(120, 80, 45);
+    let rig = Rig::new(*view, V2::ZERO, 0.0, 1.0);
     let (px, py) = sim::POUCH;
-    let base = view.p(px, 0.0);
-    let fork = view.p(px, 2.0);
-    let la = view.p(px - 0.45, py + 0.15);
-    let w = 0.32 * view.s;
-    draw_line(base.x, base.y, fork.x, fork.y, w, wood);
-    draw_line(fork.x, fork.y, la.x, la.y, w * 0.8, wood);
+    let bark = rgb(120, 80, 45);
+    let line = rgb(60, 36, 20);
+    // Trunk: tapered with a highlight.
+    let trunk = [
+        (px - 0.2, 0.0),
+        (px + 0.2, 0.0),
+        (px + 0.15, 2.0),
+        (px - 0.15, 2.0),
+    ];
+    rig.poly(&trunk, bark, Some((line, 0.05)));
+    rig.stroke(
+        &[(px - 0.06, 0.1), (px - 0.05, 1.9)],
+        0.06,
+        rgba(255, 220, 180, 0.25),
+    );
+    let arm = bez((px, 1.9), (px - 0.25, 2.4), (px - 0.45, py + 0.2), 8);
+    rig.stroke(&arm, 0.3, line);
+    rig.stroke(&arm, 0.22, bark);
+    let (la, ra) = ((px - 0.45, py + 0.15), (px + 0.45, py + 0.15));
     if let Some(p) = pig_pos {
-        let pp = view.v(p);
-        draw_line(la.x, la.y, pp.x, pp.y, 0.14 * view.s, rgb(70, 40, 30));
+        // Both bands run to a leather pouch cupping the back of the pig.
+        let pouch = (p.x - 0.12, p.y);
+        rig.stroke(&[la, pouch], 0.16, rgb(70, 30, 30));
+        rig.stroke(&[ra, pouch], 0.16, rgb(92, 40, 36));
+        rig.blob(
+            pouch.0,
+            pouch.1,
+            0.3,
+            0.42,
+            0.0,
+            rgb(140, 90, 60),
+            rgb(96, 58, 36),
+            Some((line, 0.04)),
+        );
     }
 }
 
 pub fn sling_front(view: &View, pig_pos: Option<V2>) {
-    let wood = rgb(140, 95, 55);
+    let rig = Rig::new(*view, V2::ZERO, 0.0, 1.0);
     let (px, py) = sim::POUCH;
-    let fork = view.p(px, 2.0);
-    let ra = view.p(px + 0.45, py + 0.15);
-    let w = 0.32 * view.s;
-    draw_line(fork.x, fork.y, ra.x, ra.y, w * 0.8, wood);
-    let la = view.p(px - 0.45, py + 0.15);
-    let band = rgb(90, 50, 35);
-    match pig_pos {
-        Some(p) => {
-            let pp = view.v(p);
-            draw_line(ra.x, ra.y, pp.x, pp.y, 0.14 * view.s, band);
-        }
-        None => draw_line(la.x, la.y, ra.x, ra.y, 0.1 * view.s, band),
+    let bark = rgb(140, 95, 55);
+    let line = rgb(60, 36, 20);
+    let arm = bez((px, 1.9), (px + 0.25, 2.4), (px + 0.45, py + 0.2), 8);
+    rig.stroke(&arm, 0.3, line);
+    rig.stroke(&arm, 0.22, bark);
+    let (la, ra) = ((px - 0.45, py + 0.15), (px + 0.45, py + 0.15));
+    if pig_pos.is_none() {
+        let sag = bez(la, (px, py - 0.25), ra, 8);
+        rig.stroke(&sag, 0.12, rgb(92, 40, 36));
+    }
+    for tip in [la, ra] {
+        rig.circle(tip.0, tip.1 + 0.05, 0.14, line);
+        rig.circle(tip.0, tip.1 + 0.05, 0.1, bark);
     }
 }
 
-pub fn trajectory(view: &View, pull: V2) {
+pub fn trajectory(view: &View, pull: V2, time: f32) {
     let pts = Game::trajectory(pull, 26, 0.07);
+    let march = (time * 2.0) % 1.0;
     for (i, p) in pts.iter().enumerate() {
         if p.y < 0.0 {
             break;
         }
-        let a = 0.9 - i as f32 * 0.03;
+        let fi = i as f32 + march;
+        let a = (0.9 - fi * 0.03).max(0.0);
         let q = view.v(*p);
         draw_circle(
             q.x,
             q.y,
-            (0.13 - i as f32 * 0.003) * view.s,
-            Color::new(1.0, 1.0, 1.0, a),
+            (0.14 - fi * 0.003) * view.s,
+            rgba(80, 60, 60, a * 0.35),
+        );
+        draw_circle(
+            q.x,
+            q.y,
+            (0.11 - fi * 0.003) * view.s,
+            rgba(255, 255, 255, a),
         );
     }
 }
 
 /// The pigs waiting their turn, lined up beside the sling.
 pub fn queue(view: &View, game: &Game, time: f32) {
-    let skip = if game.phase == Phase::Aiming { 1 } else { 0 };
+    let won = matches!(game.phase, Phase::Won { .. });
+    let skip = usize::from(game.phase == Phase::Aiming);
     let mut x = sim::POUCH.0 - 1.4;
     for (i, &k) in game.pigs_left.iter().enumerate().skip(skip) {
         let r = k.radius();
-        let hop = ((time * 3.0 + i as f32).sin().max(0.0)) * 0.15;
-        pig(view, k, V2::new(x, r + hop), 0.0, time);
-        x -= r * 2.0 + 0.3;
+        let hop_speed = if won { 9.0 } else { 3.0 };
+        let height = if won { 0.6 } else { 0.15 };
+        let hop = ((time * hop_speed + i as f32 * 1.3).sin().max(0.0)) * height;
+        let seed = u32::try_from(i).unwrap_or(0).wrapping_mul(7919) + 17;
+        let mood = if won { Mood::Cheer } else { Mood::Idle };
+        let mut anim = Anim::new(time, seed, mood, V2::new(1.0, 0.15));
+        if hop < 0.01 && !won {
+            // Squash a touch on landing.
+            anim.stretch = -0.06 * ((time * hop_speed + i as f32 * 1.3).sin().abs());
+        }
+        art::pig(view, k, V2::new(x, r + hop), 0.0, &anim);
+        x -= r * 2.0 + 0.35;
     }
 }
 
@@ -511,29 +458,45 @@ pub fn star(c: Vec2, r: f32, filled: bool) {
     let col = if filled {
         rgb(255, 210, 60)
     } else {
-        Color::new(0.0, 0.0, 0.0, 0.25)
+        rgba(0, 0, 0, 0.25)
     };
     let pts: Vec<Vec2> = (0..10)
         .map(|i| {
-            let a = -std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::PI / 5.0;
+            let a = -FRAC_PI_2 + i as f32 * std::f32::consts::PI / 5.0;
             let rr = if i % 2 == 0 { r } else { r * 0.45 };
             c + vec2(a.cos(), a.sin()) * rr
         })
         .collect();
+    if filled {
+        for i in 0..10 {
+            draw_triangle(
+                c + vec2(0.0, r * 0.08),
+                pts[i] + vec2(0.0, r * 0.08),
+                pts[(i + 1) % 10] + vec2(0.0, r * 0.08),
+                rgb(200, 140, 20),
+            );
+        }
+    }
     for i in 0..10 {
         draw_triangle(c, pts[i], pts[(i + 1) % 10], col);
     }
 }
 
+/// Pixel size → macroquad font size.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub fn font_size(px: f32) -> u16 {
+    px.clamp(1.0, 1000.0) as u16
+}
+
 pub fn text_centered(text: &str, x: f32, y: f32, size: f32, color: Color) {
-    let dims = measure_text(text, None, size as u16, 1.0);
+    let dims = measure_text(text, None, font_size(size), 1.0);
     let px = x - dims.width / 2.0;
     draw_text(
         text,
         px + size * 0.04,
         y + size * 0.04,
         size,
-        Color::new(0.0, 0.0, 0.0, 0.35),
+        Color::new(0.0, 0.0, 0.0, 0.35 * color.a),
     );
     draw_text(text, px, y, size, color);
 }

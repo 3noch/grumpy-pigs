@@ -1,6 +1,10 @@
 //! Level definitions. Ground top is y = 0; the sling sits at x ≈ 6.
 
-use crate::sim::{BlockDef, Level, Material, Material::*, PigKind::*};
+use crate::sim::{
+    BlockDef, Level, Material,
+    Material::{Brick, Straw, Wood},
+    PigKind::{Boomer, Dasher, Grunt, Hog},
+};
 
 const T: f32 = 0.4; // thickness of posts and planks
 

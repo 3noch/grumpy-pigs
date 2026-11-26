@@ -77,10 +77,9 @@ impl PigKind {
     }
     pub fn hint(self) -> &'static str {
         match self {
-            PigKind::Grunt => "",
+            PigKind::Grunt | PigKind::Hog => "",
             PigKind::Dasher => "Tap to DASH!",
             PigKind::Boomer => "Tap to BOOM!",
-            PigKind::Hog => "",
         }
     }
 }
@@ -109,6 +108,12 @@ pub struct Ent {
     pub pos: V2,
     pub angle: f32,
     pub hurt_flash: f32,
+    /// Current linear velocity (for animation).
+    pub vel: V2,
+    /// Recent impact strength 0..1, decays quickly (for squash animation).
+    pub impact: f32,
+    /// Velocity direction just before the last impact (squash axis).
+    pub impact_dir: V2,
     pub alive: bool,
     /// Stable per-entity seed used for cosmetic variation (cracks etc).
     pub seed: u32,
@@ -119,6 +124,16 @@ impl Ent {
     pub fn hp_frac(&self) -> f32 {
         (self.hp / self.max_hp).clamp(0.0, 1.0)
     }
+}
+
+/// The pig currently in the air.
+#[derive(Clone, Copy, Debug)]
+pub struct Flight {
+    pub ent: usize,
+    pub kind: PigKind,
+    pub used: bool,
+    /// Seconds since it first hit something.
+    pub since_impact: Option<f32>,
 }
 
 #[derive(Clone, Debug)]
@@ -244,14 +259,15 @@ impl Game {
             g.push(h, Kind::Wolf, Shape::Ball { r }, 6.0);
             g.max_score += 5000;
         }
-        g.max_score += 10_000 * (level.pigs.len().saturating_sub(1)) as u32;
+        g.max_score += 10_000 * u32::try_from(level.pigs.len().saturating_sub(1)).unwrap_or(0);
         g
     }
 
     fn push(&mut self, handle: RigidBodyHandle, kind: Kind, shape: Shape, hp: f32) -> usize {
         let body = &self.world.bodies[handle];
-        let seed = (self.ents.len() as u32)
-            .wrapping_mul(2654435761)
+        let seed = u32::try_from(self.ents.len())
+            .unwrap_or(0)
+            .wrapping_mul(2_654_435_761)
             .rotate_left(7);
         self.ents.push(Ent {
             handle,
@@ -262,6 +278,9 @@ impl Game {
             pos: body.translation(),
             angle: body.rotation().angle(),
             hurt_flash: 0.0,
+            vel: V2::ZERO,
+            impact: 0.0,
+            impact_dir: V2::X,
             alive: true,
             seed,
             prev_v: V2::ZERO,
@@ -284,10 +303,25 @@ impl Game {
     }
 
     pub fn flying_pig(&self) -> Option<(PigKind, bool)> {
-        if let Phase::Flying { ent, used, .. } = self.phase
-            && let Kind::Pig(k) = self.ents[ent].kind
+        self.flight().map(|f| (f.kind, f.used))
+    }
+
+    /// Details about the pig currently in the air, if any.
+    pub fn flight(&self) -> Option<Flight> {
+        if let Phase::Flying {
+            ent,
+            used,
+            impact_t,
+            ..
+        } = self.phase
+            && let Kind::Pig(kind) = self.ents[ent].kind
         {
-            return Some((k, used));
+            return Some(Flight {
+                ent,
+                kind,
+                used,
+                since_impact: impact_t,
+            });
         }
         None
     }
@@ -324,7 +358,7 @@ impl Game {
             .translation(Self::pouch() + pull)
             .linvel(Self::launch_velocity(pull))
             .ccd_enabled(true)
-            .angular_damping(0.6);
+            .angular_damping(1.5);
         let col = ColliderBuilder::ball(r)
             .density(kind.density())
             .friction(0.6)
@@ -478,7 +512,16 @@ impl Game {
             e.angle = body.rotation().angle();
             let v = body.linvel();
             let dv = (v - e.prev_v).length();
+            if dv > 2.5 {
+                let strength = (dv / 12.0).min(1.0);
+                if strength > e.impact {
+                    e.impact = strength;
+                    e.impact_dir = (v - e.prev_v).normalize_or(V2::Y);
+                }
+            }
             e.prev_v = v;
+            e.vel = v;
+            e.impact = (e.impact - DT * 2.5).max(0.0);
             e.hurt_flash = (e.hurt_flash - DT * 3.0).max(0.0);
 
             if matches!(e.kind, Kind::Pig(_)) {
@@ -562,7 +605,12 @@ impl Game {
                     self.phase = Phase::Settling { t: 0.0 };
                     return;
                 }
-                if oob || slow_t > 0.8 || t > 9.0 || self.wolves_alive() == 0 {
+                if oob
+                    || slow_t > 0.8
+                    || t > 9.0
+                    || impact_t.is_some_and(|x| x > 3.5)
+                    || self.wolves_alive() == 0
+                {
                     self.kill(ent, false);
                     self.phase = Phase::Settling { t: 0.0 };
                 } else {
@@ -581,7 +629,7 @@ impl Game {
                 if !done {
                     self.phase = Phase::Settling { t };
                 } else if self.wolves_alive() == 0 {
-                    self.score += 10_000 * self.pigs_left.len() as u32;
+                    self.score += 10_000 * u32::try_from(self.pigs_left.len()).unwrap_or(0);
                     self.phase = Phase::Won { t: 0.0 };
                 } else if !self.pigs_left.is_empty() {
                     self.phase = Phase::Aiming;
@@ -612,8 +660,9 @@ mod tests {
     use super::*;
     use crate::levels;
 
-    fn run(g: &mut Game, secs: f32) {
-        for _ in 0..(secs * 60.0) as usize {
+    /// Advance `frames` fixed steps (60 per second).
+    fn run(g: &mut Game, frames: u32) {
+        for _ in 0..frames {
             g.update(DT);
         }
     }
@@ -623,7 +672,7 @@ mod tests {
         for lvl in levels::all() {
             let mut g = Game::new(&lvl);
             let before = g.ents.iter().filter(|e| e.alive).count();
-            run(&mut g, 4.0);
+            run(&mut g, 240);
             let after = g.ents.iter().filter(|e| e.alive).count();
             assert_eq!(before, after, "level '{}' collapsed on its own", lvl.name);
             assert_eq!(g.phase, Phase::Aiming);
@@ -634,24 +683,27 @@ mod tests {
     fn a_good_shot_does_damage() {
         let lvl = &levels::all()[0];
         let mut g = Game::new(lvl);
-        run(&mut g, 1.5);
+        run(&mut g, 90);
         // Try a fan of shots; at least one should kill something.
         let mut best = 0;
         for i in 0..12 {
             let mut g = Game::new(lvl);
-            run(&mut g, 1.5);
+            run(&mut g, 90);
             let ang = (10.0 + i as f32 * 5.0).to_radians();
             g.launch(V2::new(-ang.cos(), -ang.sin()) * MAX_PULL);
-            run(&mut g, 8.0);
+            run(&mut g, 480);
             best = best.max(g.score);
         }
         assert!(best >= 5000, "no shot killed a wolf (best score {best})");
     }
 
-    /// Plays a sequence of (angle_deg, power 0..1, tap_delay) shots from scratch.
-    fn replay(lvl: &Level, shots: &[(f32, f32, Option<f32>)]) -> Game {
+    /// A test shot: `(angle_deg, power 0..1, ability tap delay)`.
+    type Shot = (f32, f32, Option<f32>);
+
+    /// Replays shots on a fresh copy of the level.
+    fn replay(lvl: &Level, shots: &[Shot]) -> Game {
         let mut g = Game::new(lvl);
-        run(&mut g, 1.5);
+        run(&mut g, 90);
         for &(deg, pow, tap) in shots {
             if g.phase != Phase::Aiming {
                 break;
@@ -674,7 +726,7 @@ mod tests {
     #[test]
     fn every_level_is_winnable() {
         for lvl in levels::all() {
-            let mut shots: Vec<(f32, f32, Option<f32>)> = Vec::new();
+            let mut shots: Vec<Shot> = Vec::new();
             let mut won = false;
             for p in 0..lvl.pigs.len() {
                 let has_power = matches!(lvl.pigs[p], PigKind::Dasher | PigKind::Boomer);
@@ -683,7 +735,7 @@ mod tests {
                 } else {
                     &[None]
                 };
-                let mut best: Option<((usize, u32), (f32, f32, Option<f32>))> = None;
+                let mut best: Option<((usize, u32), Shot)> = None;
                 for deg in (-10..=70).step_by(4) {
                     for pow in [0.7, 0.8, 0.9, 1.0] {
                         for &tap in taps {
@@ -721,11 +773,11 @@ mod tests {
     fn turn_flow_reaches_end() {
         let lvl = &levels::all()[0];
         let mut g = Game::new(lvl);
-        run(&mut g, 1.5);
+        run(&mut g, 90);
         for _ in 0..lvl.pigs.len() {
             // Weak shot straight down into the ground.
             g.launch(V2::new(-0.5, 0.5));
-            run(&mut g, 15.0);
+            run(&mut g, 900);
         }
         assert!(matches!(g.phase, Phase::Lost { .. } | Phase::Won { .. }));
     }

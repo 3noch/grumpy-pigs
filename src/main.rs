@@ -1,9 +1,13 @@
 //! Grumpy Pigs — fling furious pigs at the smug wolves who stole their mud.
 
+mod art;
+mod gfx;
 mod levels;
 mod render;
 mod sim;
 
+use art::{Anim, Mood};
+use gfx::{mix, rgb};
 use macroquad::prelude::*;
 use render::View;
 use sim::{Event, Game, Kind, Level, Material, Phase, V2};
@@ -48,6 +52,9 @@ struct App {
     particles: Vec<Particle>,
     popups: Vec<Popup>,
     shake: f32,
+    /// Wolves mock a missed shot for a moment.
+    laugh: f32,
+    trail_t: f32,
     aim_start: Option<Vec2>,
     time: f32,
 }
@@ -104,15 +111,6 @@ fn button(rect: Rect, label: &str, input: &Input, accent: Color) -> bool {
     input.pressed.is_some_and(|p| rect.contains(p))
 }
 
-fn mix(a: Color, b: Color, t: f32) -> Color {
-    Color::new(
-        a.r + (b.r - a.r) * t,
-        a.g + (b.g - a.g) * t,
-        a.b + (b.b - a.b) * t,
-        a.a,
-    )
-}
-
 const GREEN: Color = Color::new(0.35, 0.68, 0.3, 1.0);
 const ORANGE: Color = Color::new(0.93, 0.55, 0.2, 1.0);
 const SLATE: Color = Color::new(0.35, 0.38, 0.48, 1.0);
@@ -127,6 +125,8 @@ impl App {
             particles: Vec::new(),
             popups: Vec::new(),
             shake: 0.0,
+            laugh: 0.0,
+            trail_t: 0.0,
             aim_start: None,
             time: 0.0,
         }
@@ -170,14 +170,20 @@ impl App {
 
         // A couple of mascots
         let deco = View::fit(Vec2::ZERO);
-        render::pig(
+        let hop = (self.time * 4.0).sin().abs();
+        let mut grunt = Anim::new(self.time, 3, Mood::Yell, V2::new(1.0, 0.3));
+        grunt.stretch = (hop - 0.5) * 0.2;
+        art::pig(
             &deco,
             sim::PigKind::Grunt,
-            V2::new(8.0, 0.9 + (self.time * 4.0).sin().abs() * 0.6),
+            V2::new(8.0, 0.5 + hop * 0.8),
             (self.time * 2.0).sin() * 0.2,
-            self.time,
+            &grunt,
         );
-        render::pig(&deco, sim::PigKind::Hog, V2::new(4.5, 0.7), 0.0, self.time);
+        let hog = Anim::new(self.time, 5, Mood::Idle, V2::new(1.0, 0.2));
+        art::pig(&deco, sim::PigKind::Hog, V2::new(4.5, 0.7), 0.0, &hog);
+        let smug = Anim::new(self.time, 9, Mood::Idle, V2::new(-1.0, -0.2));
+        art::wolf(&deco, V2::new(35.0, 0.7), 0.0, 0.7, 1.0, 0.0, &smug);
 
         render::text_centered(
             "GRUMPY PIGS",
@@ -214,12 +220,12 @@ impl App {
                 label_size,
                 WHITE,
             );
-            for s in 0..3 {
+            for s in 0..3u8 {
                 let c = vec2(
-                    r.center().x + (s as f32 - 1.0) * bw * 0.3,
+                    r.center().x + (f32::from(s) - 1.0) * bw * 0.3,
                     r.bottom() + label_size * 3.0,
                 );
-                render::star(c, bw * 0.12, (s as u8) < self.best_stars[i]);
+                render::star(c, bw * 0.12, s < self.best_stars[i]);
             }
         }
         render::text_centered(
@@ -235,77 +241,91 @@ impl App {
     }
 
     fn play(&mut self, input: &Input, view: &View, dt: f32) {
-        let Screen::Play { idx, game } = &mut self.screen else {
+        let Screen::Play { idx, mut game } = std::mem::replace(&mut self.screen, Screen::Menu)
+        else {
             return;
         };
-        let idx = *idx;
-        let u = ui_unit();
-        let (sw, sh) = (screen_width(), screen_height());
-
-        // --- HUD buttons (consume taps before gameplay sees them) ---
-        let bs = u * 0.09;
-        let menu_r = Rect::new(u * 0.03, u * 0.03, bs, bs);
-        let retry_r = Rect::new(u * 0.03 + bs * 1.2, u * 0.03, bs, bs);
+        let hud = HudButtons::new();
         let ended = matches!(game.phase, Phase::Won { .. } | Phase::Lost { .. });
-
-        let mut go_menu = false;
-        let mut restart = false;
-        let mut next = false;
-        let on_hud = input
-            .pressed
-            .is_some_and(|p| menu_r.contains(p) || retry_r.contains(p));
-
-        // --- Gameplay input ---
-        if !ended && !on_hud {
-            match game.phase {
-                Phase::Aiming => {
-                    if let Some(p) = input.pressed {
-                        self.aim_start = Some(p);
-                    }
-                    if let (Some(start), Some(cur)) = (self.aim_start, input.down) {
-                        let d = (cur - start) / view.s;
-                        let pull = V2::new(d.x, -d.y).clamp_length_max(sim::MAX_PULL);
-                        game.aim = Some(pull);
-                    }
-                    if input.released {
-                        if let Some(pull) = game.aim.take()
-                            && pull.length() > 0.5
-                        {
-                            game.launch(pull);
-                        }
-                        self.aim_start = None;
-                    }
-                }
-                Phase::Flying { .. } if input.pressed.is_some() => {
-                    game.ability();
-                }
-                _ => {}
-            }
+        if !ended && !input.pressed.is_some_and(|p| hud.contains(p)) {
+            self.handle_input(&mut game, input, view);
         }
 
         game.update(dt);
+        self.apply_events(&mut game);
+        self.animate(&game, dt);
+        self.draw_world(&game, view);
+        self.draw_effects(view, dt);
 
-        // --- Effects from simulation events ---
-        for ev in game.events.drain(..) {
+        let mut nav = self.draw_hud(idx, &game, input, &hud);
+        let overlay = self.end_overlay(idx, &game, input);
+        if nav == Nav::Stay {
+            nav = overlay;
+        }
+
+        self.screen = Screen::Play { idx, game };
+        match nav {
+            Nav::Stay => {}
+            Nav::Menu => self.screen = Screen::Menu,
+            Nav::Restart => self.start(idx),
+            Nav::Next => self.start(idx + 1),
+        }
+    }
+
+    fn handle_input(&mut self, game: &mut Game, input: &Input, view: &View) {
+        match game.phase {
+            Phase::Aiming => {
+                if let Some(p) = input.pressed {
+                    self.aim_start = Some(p);
+                }
+                if let (Some(start), Some(cur)) = (self.aim_start, input.down) {
+                    let d = (cur - start) / view.s;
+                    let pull = V2::new(d.x, -d.y).clamp_length_max(sim::MAX_PULL);
+                    game.aim = Some(pull);
+                }
+                if input.released {
+                    if let Some(pull) = game.aim.take()
+                        && pull.length() > 0.5
+                    {
+                        game.launch(pull);
+                    }
+                    self.aim_start = None;
+                }
+            }
+            Phase::Flying { .. } if input.pressed.is_some() => game.ability(),
+            _ => {}
+        }
+    }
+
+    fn spawn(&mut self, pos: V2, vel: Vec2, life: f32, size: f32, color: Color, gravity: bool) {
+        self.particles.push(Particle {
+            pos: vec2(pos.x, pos.y),
+            vel,
+            life,
+            max_life: life,
+            size,
+            color,
+            gravity,
+        });
+    }
+
+    /// Turns simulation events into particles, popups, shake and taunts.
+    fn apply_events(&mut self, game: &mut Game) {
+        let wolves_alive = game.wolves_alive();
+        for ev in std::mem::take(&mut game.events) {
             match ev {
                 Event::Destroyed { pos, kind, points } => {
                     let color = match kind {
-                        Kind::Block(Material::Straw) => Color::from_rgba(236, 205, 110, 255),
-                        Kind::Block(Material::Wood) => Color::from_rgba(170, 110, 60, 255),
-                        Kind::Block(Material::Brick) => Color::from_rgba(178, 82, 64, 255),
-                        _ => Color::from_rgba(150, 150, 165, 255),
+                        Kind::Block(Material::Straw) => rgb(236, 205, 110),
+                        Kind::Block(Material::Wood) => rgb(170, 110, 60),
+                        Kind::Block(Material::Brick) => rgb(178, 82, 64),
+                        _ => rgb(150, 150, 165),
                     };
                     let n = if kind == Kind::Wolf { 22 } else { 12 };
                     for _ in 0..n {
-                        self.particles.push(Particle {
-                            pos: vec2(pos.x, pos.y),
-                            vel: vec2(rand::gen_range(-5.0, 5.0), rand::gen_range(0.0, 7.0)),
-                            life: rand::gen_range(0.5, 1.1),
-                            max_life: 1.1,
-                            size: rand::gen_range(0.08, 0.22),
-                            color,
-                            gravity: true,
-                        });
+                        let vel = vec2(rand::gen_range(-5.0, 5.0), rand::gen_range(0.0, 7.0));
+                        let life = rand::gen_range(0.5, 1.1);
+                        self.spawn(pos, vel, life, rand::gen_range(0.08, 0.22), color, true);
                     }
                     if points > 0 {
                         self.popups.push(Popup {
@@ -320,92 +340,143 @@ impl App {
                 }
                 Event::Explosion { pos, radius } => {
                     self.shake = 1.0;
-                    for _ in 0..50 {
+                    for i in 0..50 {
                         let a = rand::gen_range(0.0, std::f32::consts::TAU);
-                        let sp = rand::gen_range(2.0, radius * 3.0);
-                        self.particles.push(Particle {
-                            pos: vec2(pos.x, pos.y),
-                            vel: vec2(a.cos(), a.sin()) * sp,
-                            life: rand::gen_range(0.3, 0.8),
-                            max_life: 0.8,
-                            size: rand::gen_range(0.2, 0.5),
-                            color: if rand::gen_range(0, 2) == 0 {
-                                Color::from_rgba(255, 190, 60, 255)
-                            } else {
-                                Color::from_rgba(255, 120, 40, 255)
-                            },
-                            gravity: false,
-                        });
+                        let vel = vec2(a.cos(), a.sin()) * rand::gen_range(2.0, radius * 3.0);
+                        let color = if i % 2 == 0 {
+                            rgb(255, 190, 60)
+                        } else {
+                            rgb(255, 120, 40)
+                        };
+                        let life = rand::gen_range(0.3, 0.8);
+                        self.spawn(pos, vel, life, rand::gen_range(0.2, 0.5), color, false);
                     }
                 }
                 Event::Hit { pos, strength } => {
-                    for _ in 0..(strength as usize).min(8) {
-                        self.particles.push(Particle {
-                            pos: vec2(pos.x, pos.y),
-                            vel: vec2(rand::gen_range(-3.0, 3.0), rand::gen_range(0.0, 4.0)),
-                            life: 0.4,
-                            max_life: 0.4,
-                            size: 0.08,
-                            color: Color::new(1.0, 1.0, 0.9, 1.0),
-                            gravity: true,
-                        });
+                    for _ in 0..gfx::count(strength, 8) {
+                        let vel = vec2(rand::gen_range(-3.0, 3.0), rand::gen_range(0.0, 4.0));
+                        self.spawn(pos, vel, 0.4, 0.08, Color::new(1.0, 1.0, 0.9, 1.0), true);
                     }
                 }
                 Event::Dash { pos } => {
                     for _ in 0..20 {
-                        self.particles.push(Particle {
-                            pos: vec2(pos.x, pos.y),
-                            vel: vec2(rand::gen_range(-4.0, 1.0), rand::gen_range(-2.0, 2.0)),
-                            life: 0.5,
-                            max_life: 0.5,
-                            size: rand::gen_range(0.1, 0.25),
-                            color: Color::new(1.0, 0.85, 0.4, 1.0),
-                            gravity: false,
-                        });
+                        let vel = vec2(rand::gen_range(-4.0, 1.0), rand::gen_range(-2.0, 2.0));
+                        let size = rand::gen_range(0.1, 0.25);
+                        self.spawn(pos, vel, 0.5, size, Color::new(1.0, 0.85, 0.4, 1.0), false);
                     }
                 }
                 Event::Poof { pos } => {
+                    if wolves_alive > 0 {
+                        self.laugh = 2.0;
+                    }
                     for _ in 0..14 {
-                        self.particles.push(Particle {
-                            pos: vec2(pos.x, pos.y),
-                            vel: vec2(rand::gen_range(-2.0, 2.0), rand::gen_range(-1.0, 2.5)),
-                            life: 0.7,
-                            max_life: 0.7,
-                            size: rand::gen_range(0.2, 0.4),
-                            color: Color::new(1.0, 1.0, 1.0, 0.8),
-                            gravity: false,
-                        });
+                        let vel = vec2(rand::gen_range(-2.0, 2.0), rand::gen_range(-1.0, 2.5));
+                        let size = rand::gen_range(0.2, 0.4);
+                        self.spawn(pos, vel, 0.7, size, Color::new(1.0, 1.0, 1.0, 0.8), false);
                     }
                 }
                 Event::Launch => {}
             }
         }
+    }
 
-        // --- Draw world ---
+    /// Per-frame cosmetic state: taunt timer and the flight smoke trail.
+    fn animate(&mut self, game: &Game, dt: f32) {
+        self.laugh = (self.laugh - dt).max(0.0);
+        let Some(f) = game.flight() else { return };
+        let e = &game.ents[f.ent];
+        if !e.alive || f.since_impact.is_some() {
+            return;
+        }
+        self.trail_t += dt;
+        while self.trail_t > 0.035 {
+            self.trail_t -= 0.035;
+            let vel = vec2(rand::gen_range(-0.3, 0.3), rand::gen_range(-0.3, 0.3));
+            let size = rand::gen_range(0.12, 0.2);
+            self.spawn(e.pos, vel, 0.6, size, Color::new(1.0, 1.0, 1.0, 0.6), false);
+        }
+    }
+
+    fn draw_world(&self, game: &Game, view: &View) {
+        let flight = game.flight().filter(|f| game.ents[f.ent].alive);
+        let pig_pos = flight.map(|f| game.ents[f.ent].pos);
+        let lost = matches!(game.phase, Phase::Lost { .. });
+
         let aim_pos = game.aim.map(|p| Game::pouch() + p);
         let loaded = game.current_pig();
         let band_pos = loaded.map(|_| aim_pos.unwrap_or(Game::pouch()));
+        render::grass(view, self.time);
         render::sling_back(view, band_pos);
         render::queue(view, game, self.time);
-        for e in game.ents.iter().filter(|e| e.alive) {
+
+        for (i, e) in game.ents.iter().enumerate().filter(|(_, e)| e.alive) {
+            let mut anim = Anim::new(self.time, e.seed, Mood::Idle, V2::X);
+            if e.impact > 0.02 {
+                anim.stretch = -e.impact * 0.35;
+                anim.stretch_dir = e.impact_dir;
+            }
             match e.kind {
                 Kind::Block(_) | Kind::Rock => render::block(view, e),
-                Kind::Wolf => render::wolf(view, e),
-                Kind::Pig(k) => render::pig(view, k, e.pos, e.angle, self.time),
+                Kind::Wolf => {
+                    let sim::Shape::Ball { r } = e.shape else {
+                        continue;
+                    };
+                    let near = pig_pos.is_some_and(|p| (p - e.pos).length() < 9.0);
+                    anim.mood = if e.hurt_flash > 0.35 {
+                        Mood::Hurt
+                    } else if self.laugh > 0.0 || lost {
+                        Mood::Laugh
+                    } else if near || e.hp_frac() < 0.6 {
+                        Mood::Worried
+                    } else {
+                        Mood::Idle
+                    };
+                    anim.look = pig_pos.unwrap_or(Game::pouch()) - e.pos;
+                    art::wolf(view, e.pos, e.angle, r, e.hp_frac(), e.hurt_flash, &anim);
+                }
+                Kind::Pig(k) => {
+                    let mine = flight.filter(|f| f.ent == i);
+                    let airborne = mine.is_some_and(|f| f.since_impact.is_none());
+                    anim.mood = if airborne { Mood::Yell } else { Mood::Dizzy };
+                    anim.look = if e.vel.length() > 0.5 { e.vel } else { V2::X };
+                    if airborne && e.impact <= 0.02 {
+                        anim.stretch = (e.vel.length() / 70.0).min(0.22);
+                        anim.stretch_dir = e.vel;
+                    }
+                    if let Some(f) = mine
+                        && k == sim::PigKind::Boomer
+                        && !f.used
+                    {
+                        anim.glow = f.since_impact.map_or(0.0, |s| (s / 1.2).min(1.0));
+                    }
+                    art::pig(view, k, e.pos, e.angle, &anim);
+                }
             }
         }
-        if let Some(k) = loaded {
-            let p = band_pos.unwrap();
-            render::pig(view, k, p, 0.0, self.time);
+
+        if let (Some(k), Some(p)) = (loaded, band_pos) {
+            let pull = game.aim.unwrap_or(V2::ZERO);
+            let mood = if game.aim.is_some() {
+                Mood::Aim
+            } else {
+                Mood::Idle
+            };
+            let mut anim = Anim::new(self.time, 1, mood, V2::new(1.0, 0.2));
+            if pull.length() > 0.1 {
+                anim.stretch = pull.length() / sim::MAX_PULL * 0.18;
+                anim.stretch_dir = pull;
+            }
+            art::pig(view, k, p, 0.0, &anim);
         }
         render::sling_front(view, band_pos);
         if let Some(pull) = game.aim
             && pull.length() > 0.5
         {
-            render::trajectory(view, pull);
+            render::trajectory(view, pull, self.time);
         }
+    }
 
-        // Particles & popups
+    fn draw_effects(&mut self, view: &View, dt: f32) {
         self.particles.retain_mut(|p| {
             p.life -= dt;
             if p.gravity {
@@ -420,7 +491,7 @@ impl App {
                 q.x,
                 q.y,
                 p.size * view.s * (0.5 + a * 0.5),
-                Color::new(p.color.r, p.color.g, p.color.b, p.color.a * a),
+                gfx::alpha(p.color, a),
             );
             p.life > 0.0
         });
@@ -438,145 +509,147 @@ impl App {
             );
             p.life > 0.0
         });
+    }
 
-        // --- HUD ---
+    fn draw_hud(&self, idx: usize, game: &Game, input: &Input, hud: &HudButtons) -> Nav {
+        let u = ui_unit();
+        let (sw, sh) = (screen_width(), screen_height());
         let level = &self.levels[idx];
-        render::text_centered(
-            &format!("{}. {}", idx + 1, level.name),
-            sw / 2.0,
-            u * 0.08,
-            u * 0.055,
-            WHITE,
-        );
-        let score = format!("{}", game.score);
+        let title = format!("{}. {}", idx + 1, level.name);
+        render::text_centered(&title, sw / 2.0, u * 0.08, u * 0.055, WHITE);
+
+        let score = game.score.to_string();
         let sz = u * 0.07;
-        let w = measure_text(&score, None, sz as u16, 1.0).width;
+        let w = measure_text(&score, None, render::font_size(sz), 1.0).width;
+        let (x, y) = (sw - w - u * 0.04, u * 0.1);
         draw_text(
             &score,
-            sw - w - u * 0.04 + sz * 0.04,
-            u * 0.1 + sz * 0.04,
+            x + sz * 0.04,
+            y + sz * 0.04,
             sz,
             Color::new(0.0, 0.0, 0.0, 0.35),
         );
-        draw_text(&score, sw - w - u * 0.04, u * 0.1, sz, WHITE);
-        if let Some((k, false)) = game.flying_pig() {
-            let hint = k.hint();
-            if !hint.is_empty() {
-                render::text_centered(
-                    hint,
-                    sw / 2.0,
-                    sh * 0.9,
-                    u * 0.05,
-                    Color::from_rgba(255, 230, 120, 255),
-                );
+        draw_text(&score, x, y, sz, WHITE);
+
+        let hint = match game.flying_pig() {
+            Some((k, false)) => k.hint(),
+            _ if game.phase == Phase::Aiming
+                && game.aim.is_none()
+                && game.time < 6.0
+                && idx == 0
+                && game.pigs_left.len() == level.pigs.len() =>
+            {
+                "Drag back and release to fling!"
             }
-        }
-        if game.phase == Phase::Aiming
-            && game.aim.is_none()
-            && game.time < 6.0
-            && idx == 0
-            && game.pigs_left.len() == level.pigs.len()
-        {
-            render::text_centered(
-                "Drag back and release to fling!",
-                sw / 2.0,
-                sh * 0.9,
-                u * 0.05,
-                WHITE,
-            );
+            _ => "",
+        };
+        if !hint.is_empty() {
+            render::text_centered(hint, sw / 2.0, sh * 0.9, u * 0.05, rgb(255, 236, 150));
         }
 
-        go_menu |= button(menu_r, "=", input, SLATE);
-        restart |= button(retry_r, "R", input, SLATE);
-
-        // --- End-of-level overlay ---
-        let mut stars_earned = None;
-        match game.phase {
-            Phase::Won { t } | Phase::Lost { t } if t > 0.6 => {
-                let won = matches!(game.phase, Phase::Won { .. });
-                let a = ((t - 0.6) * 3.0).min(1.0);
-                draw_rectangle(0.0, 0.0, sw, sh, Color::new(0.0, 0.0, 0.0, 0.45 * a));
-                let pw = u * 0.9;
-                let ph = u * 0.62;
-                let panel = Rect::new((sw - pw) / 2.0, (sh - ph) / 2.0, pw, ph);
-                draw_rectangle(
-                    panel.x,
-                    panel.y,
-                    panel.w,
-                    panel.h,
-                    Color::new(0.98, 0.93, 0.85, a),
-                );
-                draw_rectangle_lines(
-                    panel.x,
-                    panel.y,
-                    panel.w,
-                    panel.h,
-                    u * 0.012,
-                    Color::new(0.55, 0.35, 0.2, a),
-                );
-                let title = if won {
-                    "Wolves routed!"
-                } else {
-                    "The wolves are laughing..."
-                };
-                render::text_centered(
-                    title,
-                    sw / 2.0,
-                    panel.y + ph * 0.17,
-                    u * 0.07,
-                    if won {
-                        Color::from_rgba(90, 160, 70, 255)
-                    } else {
-                        Color::from_rgba(200, 80, 70, 255)
-                    },
-                );
-                if won {
-                    let st = game.stars();
-                    stars_earned = Some(st);
-                    for s in 0..3u8 {
-                        let pop = ((t - 0.9 - s as f32 * 0.25) * 4.0).clamp(0.0, 1.0);
-                        let c = vec2(sw / 2.0 + (s as f32 - 1.0) * u * 0.16, panel.y + ph * 0.38);
-                        render::star(c, u * 0.065 * (0.6 + 0.4 * pop), s < st && pop > 0.0);
-                    }
-                }
-                render::text_centered(
-                    &format!("Score: {}", game.score),
-                    sw / 2.0,
-                    panel.y + ph * 0.6,
-                    u * 0.055,
-                    Color::from_rgba(80, 60, 40, 255),
-                );
-                let bh = u * 0.1;
-                let bw = u * 0.24;
-                let by = panel.bottom() - bh * 1.5;
-                let has_next = won && idx + 1 < self.levels.len();
-                let count = if has_next { 3.0 } else { 2.0 };
-                let gap = u * 0.04;
-                let x0 = sw / 2.0 - (count * bw + (count - 1.0) * gap) / 2.0;
-                go_menu |= button(Rect::new(x0, by, bw, bh), "Menu", input, SLATE);
-                restart |= button(Rect::new(x0 + bw + gap, by, bw, bh), "Retry", input, ORANGE);
-                if has_next {
-                    next |= button(
-                        Rect::new(x0 + 2.0 * (bw + gap), by, bw, bh),
-                        "Next",
-                        input,
-                        GREEN,
-                    );
-                }
-            }
-            _ => {}
+        if button(hud.menu, "=", input, SLATE) {
+            Nav::Menu
+        } else if button(hud.retry, "R", input, SLATE) {
+            Nav::Restart
+        } else {
+            Nav::Stay
         }
+    }
 
-        if let Some(st) = stars_earned {
+    /// Win/lose panel with stars and navigation; records best stars.
+    fn end_overlay(&mut self, idx: usize, game: &Game, input: &Input) -> Nav {
+        let (Phase::Won { t } | Phase::Lost { t }) = game.phase else {
+            return Nav::Stay;
+        };
+        if t <= 0.6 {
+            return Nav::Stay;
+        }
+        let won = matches!(game.phase, Phase::Won { .. });
+        let u = ui_unit();
+        let (sw, sh) = (screen_width(), screen_height());
+        let a = ((t - 0.6) * 3.0).min(1.0);
+        draw_rectangle(0.0, 0.0, sw, sh, Color::new(0.0, 0.0, 0.0, 0.45 * a));
+        let (pw, ph) = (u * 0.9, u * 0.62);
+        let panel = Rect::new((sw - pw) / 2.0, (sh - ph) / 2.0, pw, ph);
+        draw_rectangle(
+            panel.x,
+            panel.y,
+            panel.w,
+            panel.h,
+            Color::new(0.98, 0.93, 0.85, a),
+        );
+        let border = Color::new(0.55, 0.35, 0.2, a);
+        draw_rectangle_lines(panel.x, panel.y, panel.w, panel.h, u * 0.012, border);
+
+        let (title, color) = if won {
+            ("Wolves routed!", rgb(90, 160, 70))
+        } else {
+            ("The wolves are laughing...", rgb(200, 80, 70))
+        };
+        render::text_centered(title, sw / 2.0, panel.y + ph * 0.17, u * 0.07, color);
+        if won {
+            let st = game.stars();
             self.best_stars[idx] = self.best_stars[idx].max(st);
+            for s in 0..3u8 {
+                let fs = f32::from(s);
+                let pop = ((t - 0.9 - fs * 0.25) * 4.0).clamp(0.0, 1.0);
+                let c = vec2(sw / 2.0 + (fs - 1.0) * u * 0.16, panel.y + ph * 0.38);
+                render::star(c, u * 0.065 * (0.6 + 0.4 * pop), s < st && pop > 0.0);
+            }
         }
-        if go_menu {
-            self.screen = Screen::Menu;
-        } else if restart {
-            self.start(idx);
-        } else if next {
-            self.start(idx + 1);
+        let score = format!("Score: {}", game.score);
+        render::text_centered(
+            &score,
+            sw / 2.0,
+            panel.y + ph * 0.6,
+            u * 0.055,
+            rgb(80, 60, 40),
+        );
+
+        let (bw, bh, gap) = (u * 0.24, u * 0.1, u * 0.04);
+        let by = panel.bottom() - bh * 1.5;
+        let has_next = won && idx + 1 < self.levels.len();
+        let count = if has_next { 3.0 } else { 2.0 };
+        let total = count * bw + (count - 1.0) * gap;
+        let x0 = (sw - total) * 0.5;
+        let slot = |i: f32| Rect::new(x0 + i * (bw + gap), by, bw, bh);
+        if button(slot(0.0), "Menu", input, SLATE) {
+            Nav::Menu
+        } else if button(slot(1.0), "Retry", input, ORANGE) {
+            Nav::Restart
+        } else if has_next && button(slot(2.0), "Next", input, GREEN) {
+            Nav::Next
+        } else {
+            Nav::Stay
         }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Nav {
+    Stay,
+    Menu,
+    Restart,
+    Next,
+}
+
+/// The always-visible menu / retry buttons in the top-left corner.
+struct HudButtons {
+    menu: Rect,
+    retry: Rect,
+}
+
+impl HudButtons {
+    fn new() -> Self {
+        let u = ui_unit();
+        let bs = u * 0.09;
+        HudButtons {
+            menu: Rect::new(u * 0.03, u * 0.03, bs, bs),
+            retry: Rect::new(u * 0.03 + bs * 1.2, u * 0.03, bs, bs),
+        }
+    }
+    fn contains(&self, p: Vec2) -> bool {
+        self.menu.contains(p) || self.retry.contains(p)
     }
 }
 
@@ -639,6 +712,14 @@ async fn main() {
             && frame >= shot.frames
         {
             get_screen_data().export_png(&shot.path);
+            if let Screen::Play { game, .. } = &app.screen {
+                eprintln!(
+                    "phase={:?} laugh={:.2} pigs_left={}",
+                    game.phase,
+                    app.laugh,
+                    game.pigs_left.len()
+                );
+            }
             break;
         }
         next_frame().await;

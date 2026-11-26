@@ -48,8 +48,12 @@ Not yet built or tested on devices. These are the standard macroquad routes:
 
 - `src/sim.rs`: physics world, damage model (impact Δv), pig powers, turn flow. No rendering, so it's unit-testable.
 - `src/levels.rs`: level builder helpers (`frame`, `post`, `plank`, `hill`, ...) and the 5 levels.
-- `src/render.rs`: procedural drawing of pigs, wolves, blocks, sling and scenery.
+- `src/gfx.rs`: vector toolkit: a posable "rig" (rotation + squash/stretch) and shaded, outlined mesh primitives.
+- `src/art.rs`: the animated characters. Pigs and wolves have moods (idle, aim, yell, dizzy, cheer / smug, worried, hurt, laugh), blinking, gaze tracking and squash-and-stretch.
+- `src/render.rs`: scenery, material-shaded blocks, sling, HUD helpers.
 - `src/main.rs`: menu, input, HUD, particles, end screens.
+
+Lints: `clippy::pedantic` is on (see `[lints.clippy]` in `Cargo.toml`); `cargo clippy --all-targets` should stay at zero warnings.
 
 Dev aid: `GRUMPY_SHOT=out.png GRUMPY_LEVEL=3 GRUMPY_LAUNCH=14,1.0 GRUMPY_FRAMES=300 cargo run --release`
 renders a scene to a PNG and exits (`GRUMPY_AIM=deg,pow` freezes mid-aim instead).
