@@ -31,6 +31,21 @@ python3 -m http.server -d dist 8000   # then open http://localhost:8000
 
 `dist/` is static files, so it can be hosted anywhere (GitHub Pages, Netlify, itch.io).
 
+### Install as an app (PWA) and fullscreen
+
+The web build is an installable Progressive Web App that works offline after the first visit:
+
+- **Android / desktop Chrome & Edge:** an **Install** button appears on the title screen.
+- **iPhone / iPad:** Safari → Share → **Add to Home Screen** (the title screen says so).
+- **Fullscreen:** the corner button on the title screen and in-game, or press **F**.
+  iPhone Safari has no fullscreen API, so there the button is hidden; installing to
+  the Home Screen gives the full-screen experience instead.
+
+Browsers only allow fullscreen and the install prompt from a real tap, so the game
+registers its button areas with `web/platform.js`, which acts on the tap itself.
+`web/sw.js` caches the game for offline play (network first, so updates arrive immediately).
+Icons are rendered by the game: `./make-icons.sh` regenerates `web/icons/` (macOS).
+
 ## Publish to GitHub Pages
 
 `.github/workflows/pages.yml` checks formatting, runs pedantic clippy and the tests, builds

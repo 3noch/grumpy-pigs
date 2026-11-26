@@ -5,6 +5,6 @@ set -euo pipefail
 cd "$(dirname "$0")"
 cargo build --profile web --target wasm32-unknown-unknown
 rm -rf dist && mkdir -p dist
-cp web/index.html web/mq_js_bundle.js dist/
+cp -R web/. dist/
 cp target/wasm32-unknown-unknown/web/grumpy-pigs.wasm dist/
 ls -lh dist

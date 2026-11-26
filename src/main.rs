@@ -3,6 +3,7 @@
 mod art;
 mod gfx;
 mod levels;
+mod platform;
 mod render;
 mod sim;
 
@@ -81,8 +82,7 @@ fn ui_unit() -> f32 {
     screen_height().min(screen_width() * 0.6)
 }
 
-/// Draws a rounded-ish button and reports whether it was tapped this frame.
-fn button(rect: Rect, label: &str, input: &Input, accent: Color) -> bool {
+fn button_bg(rect: Rect, accent: Color) {
     let hover = rect.contains(mouse_position().into());
     let col = if hover {
         mix(accent, WHITE, 0.15)
@@ -100,6 +100,11 @@ fn button(rect: Rect, label: &str, input: &Input, accent: Color) -> bool {
     ] {
         draw_circle(cx, cy, r, col);
     }
+}
+
+/// Draws a rounded button with a text label; true if tapped this frame.
+fn button(rect: Rect, label: &str, input: &Input, accent: Color) -> bool {
+    button_bg(rect, accent);
     let size = rect.h * 0.55;
     render::text_centered(
         label,
@@ -109,6 +114,89 @@ fn button(rect: Rect, label: &str, input: &Input, accent: Color) -> bool {
         WHITE,
     );
     input.pressed.is_some_and(|p| rect.contains(p))
+}
+
+#[derive(Clone, Copy)]
+enum Icon {
+    Menu,
+    Restart,
+    Expand,
+    Collapse,
+}
+
+/// Draws a rounded button with a line icon; true if tapped this frame.
+fn icon_button(rect: Rect, icon: Icon, input: &Input, accent: Color) -> bool {
+    button_bg(rect, accent);
+    let c = rect.center();
+    let k = rect.h * 0.24; // icon half-size
+    let w = rect.h * 0.08; // stroke width
+    let line = |a: Vec2, b: Vec2| draw_line(a.x, a.y, b.x, b.y, w, WHITE);
+    match icon {
+        Icon::Menu => {
+            for dy in [-0.7, 0.0, 0.7] {
+                line(c + vec2(-k, dy * k), c + vec2(k, dy * k));
+            }
+        }
+        Icon::Restart => {
+            // Three-quarter circle with an arrow head at its open end.
+            let pts: Vec<Vec2> = (0..=18)
+                .map(|i| {
+                    let a = -0.9 + i as f32 / 18.0 * 4.9;
+                    c + vec2(a.cos(), a.sin()) * k * 0.9
+                })
+                .collect();
+            for seg in pts.windows(2) {
+                line(seg[0], seg[1]);
+            }
+            for p in &pts {
+                draw_circle(p.x, p.y, w / 2.0, WHITE);
+            }
+            let tip = pts[pts.len() - 1];
+            draw_triangle(
+                tip + vec2(-k * 0.45, -k * 0.05),
+                tip + vec2(k * 0.35, k * 0.3),
+                tip + vec2(k * 0.1, -k * 0.55),
+                WHITE,
+            );
+        }
+        Icon::Expand | Icon::Collapse => {
+            let inward = matches!(icon, Icon::Collapse);
+            for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+                let corner = c + vec2(sx, sy) * k;
+                let arm = k * 0.55;
+                // Expand: brackets open outward at the corners. Collapse: point inward.
+                let (hx, vy) = if inward {
+                    (sx * arm, sy * arm)
+                } else {
+                    (-sx * arm, -sy * arm)
+                };
+                let pivot = if inward {
+                    corner - vec2(sx, sy) * arm
+                } else {
+                    corner
+                };
+                line(pivot, pivot + vec2(hx, 0.0));
+                line(pivot, pivot + vec2(0.0, vy));
+                draw_circle(pivot.x, pivot.y, w / 2.0, WHITE);
+            }
+        }
+    }
+    input.pressed.is_some_and(|p| rect.contains(p))
+}
+
+/// The fullscreen toggle, when the platform supports it. True if tapped.
+fn fullscreen_button(rect: Rect, input: &Input) -> bool {
+    let icon = match platform::fullscreen() {
+        platform::Fullscreen::Unavailable => return false,
+        platform::Fullscreen::Windowed => Icon::Expand,
+        platform::Fullscreen::Full => Icon::Collapse,
+    };
+    platform::hotspot(platform::Hotspot::Fullscreen, rect);
+    let tapped = icon_button(rect, icon, input, SLATE);
+    if tapped {
+        platform::activate(platform::Hotspot::Fullscreen);
+    }
+    tapped
 }
 
 const GREEN: Color = Color::new(0.35, 0.68, 0.3, 1.0);
@@ -145,6 +233,7 @@ impl App {
     fn frame(&mut self) {
         let dt = get_frame_time().min(0.05);
         self.time += dt;
+        platform::begin_frame();
         let input = Input::read();
 
         let shake = if self.shake > 0.0 {
@@ -199,6 +288,29 @@ impl App {
             u * 0.045,
             WHITE,
         );
+
+        let bs = u * 0.09;
+        let full = Rect::new(sw - u * 0.03 - bs, u * 0.03, bs, bs);
+        fullscreen_button(full, input);
+        match platform::install() {
+            platform::Install::Prompt => {
+                let r = Rect::new(full.x - bs * 0.3 - bs * 2.4, full.y, bs * 2.4, bs);
+                platform::hotspot(platform::Hotspot::Install, r);
+                if button(r, "Install", input, GREEN) {
+                    platform::activate(platform::Hotspot::Install);
+                }
+            }
+            platform::Install::ShareSheet => {
+                render::text_centered(
+                    "Play it like an app: tap Share, then Add to Home Screen",
+                    sw / 2.0,
+                    sh * 0.89,
+                    u * 0.032,
+                    WHITE,
+                );
+            }
+            platform::Install::Unavailable => {}
+        }
 
         let n = self.levels.len();
         let bw = u * 0.22;
@@ -547,9 +659,10 @@ impl App {
             render::text_centered(hint, sw / 2.0, sh * 0.9, u * 0.05, rgb(255, 236, 150));
         }
 
-        if button(hud.menu, "=", input, SLATE) {
+        fullscreen_button(hud.full, input);
+        if icon_button(hud.menu, Icon::Menu, input, SLATE) {
             Nav::Menu
-        } else if button(hud.retry, "R", input, SLATE) {
+        } else if icon_button(hud.retry, Icon::Restart, input, SLATE) {
             Nav::Restart
         } else {
             Nav::Stay
@@ -633,10 +746,11 @@ enum Nav {
     Next,
 }
 
-/// The always-visible menu / retry buttons in the top-left corner.
+/// The always-visible menu / retry / fullscreen buttons in the top-left corner.
 struct HudButtons {
     menu: Rect,
     retry: Rect,
+    full: Rect,
 }
 
 impl HudButtons {
@@ -646,10 +760,13 @@ impl HudButtons {
         HudButtons {
             menu: Rect::new(u * 0.03, u * 0.03, bs, bs),
             retry: Rect::new(u * 0.03 + bs * 1.2, u * 0.03, bs, bs),
+            full: Rect::new(u * 0.03 + bs * 2.4, u * 0.03, bs, bs),
         }
     }
     fn contains(&self, p: Vec2) -> bool {
-        self.menu.contains(p) || self.retry.contains(p)
+        let full =
+            platform::fullscreen() != platform::Fullscreen::Unavailable && self.full.contains(p);
+        self.menu.contains(p) || self.retry.contains(p) || full
     }
 }
 
@@ -671,8 +788,54 @@ fn pull_from_env(var: &str) -> Option<V2> {
     Some(V2::new(-a.cos(), -a.sin()) * sim::MAX_PULL * pow)
 }
 
+/// Dev aid: `GRUMPY_ICON=out.png GRUMPY_ICON_SCALE=0.36` renders the app icon
+/// (a grumpy pig on sky and grass) centered in a square, saves it and exits.
+/// `make-icons.sh` crops and resizes the result into `web/icons/`.
+async fn render_icon(path: &str, scale: f32) {
+    for frame in 0..12 {
+        clear_background(BLACK);
+        let (sw, sh) = (screen_width(), screen_height());
+        let side = sh;
+        let x0 = (sw - side) / 2.0;
+        for i in 0..40 {
+            let t = i as f32 / 40.0;
+            let col = mix(rgb(98, 170, 232), rgb(214, 238, 250), t);
+            draw_rectangle(x0, side * t, side, side / 40.0 + 1.0, col);
+        }
+        draw_rectangle(x0, side * 0.8, side, side * 0.2, rgb(98, 172, 74));
+        draw_rectangle(x0, side * 0.8, side, side * 0.025, rgb(130, 200, 96));
+        let r_px = side * scale;
+        let pig = sim::PigKind::Grunt;
+        let s = r_px / pig.radius();
+        let view = View {
+            s,
+            ox: x0 + side / 2.0,
+            oy: side / 2.0 + r_px * 0.12,
+        };
+        let anim = Anim::new(0.2, 3, Mood::Idle, V2::new(0.0, -1.0));
+        art::pig(&view, pig, V2::ZERO, 0.0, &anim);
+        if frame == 11 {
+            get_screen_data().export_png(path);
+            // The exported image is in physical pixels.
+            let k = screen_dpi_scale();
+            println!("{} 0 {}", x0 * k, side * k);
+        }
+        next_frame().await;
+    }
+}
+
 #[macroquad::main(conf)]
 async fn main() {
+    if !cfg!(target_arch = "wasm32")
+        && let Ok(path) = std::env::var("GRUMPY_ICON")
+    {
+        let scale = std::env::var("GRUMPY_ICON_SCALE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.36);
+        render_icon(&path, scale).await;
+        return;
+    }
     let mut app = App::new();
     let shot = if cfg!(target_arch = "wasm32") {
         None

@@ -3,21 +3,48 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="mobile-web-app-capable" content="yes">
-  <meta name="theme-color" content="#6eb4eb">
   <title>Grumpy Pigs</title>
+  <meta name="description" content="Fling furious pigs from a slingshot to topple the smug wolves' straw, stick and brick hideouts.">
+  <meta name="theme-color" content="#6eb4eb">
+
+  <!-- Installable app (PWA) -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Grumpy Pigs">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
   <style>
-    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #6eb4eb; }
-    canvas { display: block; width: 100vw; height: 100vh; height: 100dvh; touch-action: none; outline: none; -webkit-tap-highlight-color: transparent; }
     [hidden] { display: none !important; }
-    #status { position: fixed; inset: 0; display: grid; place-items: center; padding: 0 24px; text-align: center; color: #fff; font: 600 18px/1.4 system-ui, sans-serif; pointer-events: none; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #6eb4eb; }
+    /* Keep the game clear of notches and rounded corners when running as an app. */
+    body {
+      box-sizing: border-box;
+      height: 100vh;
+      height: 100dvh;
+      padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+               env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+    }
+    canvas {
+      display: block; width: 100%; height: 100%;
+      touch-action: none; outline: none;
+      -webkit-user-select: none; user-select: none;
+      -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none;
+    }
+    #status {
+      position: fixed; inset: 0; display: grid; place-items: center;
+      padding: 0 24px; text-align: center; color: #fff;
+      font: 600 18px/1.4 system-ui, sans-serif; pointer-events: none;
+    }
   </style>
 </head>
 <body>
   <canvas id="glcanvas" tabindex="1"></canvas>
   <div id="status">Loading Grumpy Pigs…</div>
   <script src="mq_js_bundle.js"></script>
+  <script src="platform.js"></script>
   <script>
     (function () {
       var status = document.getElementById("status");
@@ -27,9 +54,14 @@
         if (++frames === 3) status.hidden = true;
         return raf(cb);
       };
+      // macroquad's bundle throws a harmless error from a plugin we don't use,
+      // so only report errors if the game never gets going.
       function fail(msg) {
-        status.hidden = false;
-        status.textContent = "The game couldn't start: " + (msg || "unknown error");
+        setTimeout(function () {
+          if (frames >= 3) return;
+          status.hidden = false;
+          status.textContent = "The game couldn't start: " + (msg || "unknown error");
+        }, 4000);
       }
       window.addEventListener("error", function (e) { fail(e.message); });
       window.addEventListener("unhandledrejection", function (e) { fail(e.reason && e.reason.message || String(e.reason)); });
