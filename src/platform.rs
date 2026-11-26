@@ -39,6 +39,8 @@ mod imp {
         fn gp_install_state() -> i32;
         fn gp_hotspots_clear();
         fn gp_hotspot(id: i32, x: f32, y: f32, w: f32, h: f32);
+        fn gp_pref_get(key: i32) -> i32;
+        fn gp_pref_set(key: i32, value: i32);
     }
 
     pub fn fullscreen_state() -> i32 {
@@ -57,6 +59,14 @@ mod imp {
         // SAFETY: as above.
         unsafe { gp_hotspot(id, x, y, w, h) }
     }
+    pub fn pref_get(key: i32) -> i32 {
+        // SAFETY: as above.
+        unsafe { gp_pref_get(key) }
+    }
+    pub fn pref_set(key: i32, value: i32) {
+        // SAFETY: as above.
+        unsafe { gp_pref_set(key, value) }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -73,6 +83,27 @@ mod imp {
     }
     pub fn hotspots_clear() {}
     pub fn hotspot(_id: i32, _x: f32, _y: f32, _w: f32, _h: f32) {}
+
+    // Native builds keep preferences for the session only.
+    static PREFS: std::sync::Mutex<[i32; 8]> = std::sync::Mutex::new([0; 8]);
+
+    pub fn pref_get(key: i32) -> i32 {
+        let prefs = PREFS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        usize::try_from(key)
+            .ok()
+            .and_then(|k| prefs.get(k).copied())
+            .unwrap_or(0)
+    }
+    pub fn pref_set(key: i32, value: i32) {
+        let mut prefs = PREFS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(slot) = usize::try_from(key).ok().and_then(|k| prefs.get_mut(k)) {
+            *slot = value;
+        }
+    }
 
     pub fn toggle_fullscreen() {
         let full = !FULL.load(Ordering::Relaxed);
@@ -95,6 +126,22 @@ pub fn install() -> Install {
         2 => Install::ShareSheet,
         _ => Install::Unavailable,
     }
+}
+
+/// Saved player preferences.
+#[derive(Clone, Copy)]
+pub enum Pref {
+    /// Sling on the right, firing left (for left-handed play).
+    Mirror = 1,
+}
+
+/// Reads a saved on/off preference (saved in the browser on the web).
+pub fn pref(which: Pref) -> bool {
+    imp::pref_get(which as i32) != 0
+}
+
+pub fn set_pref(which: Pref, on: bool) {
+    imp::pref_set(which as i32, i32::from(on));
 }
 
 /// Call once at the start of every frame, before registering hotspots.

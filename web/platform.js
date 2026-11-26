@@ -124,6 +124,19 @@
       env.gp_hotspot = function (id, x, y, w, h) {
         hotspots.push({ id: id, x: x, y: y, w: w, h: h });
       };
+      // Small integer preferences, remembered in this browser.
+      env.gp_pref_get = function (key) {
+        try {
+          return parseInt(localStorage.getItem("grumpy-pigs.pref." + key) || "0", 10) || 0;
+        } catch (e) {
+          return 0;
+        }
+      };
+      env.gp_pref_set = function (key, value) {
+        try {
+          localStorage.setItem("grumpy-pigs.pref." + key, String(value));
+        } catch (e) { /* storage unavailable: setting lasts for this session */ }
+      };
     },
   });
 

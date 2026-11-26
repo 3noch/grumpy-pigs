@@ -9,12 +9,15 @@ use crate::art::{self, Anim, Mood};
 use crate::gfx::{P, Rig, alpha, bez, hash, mix, rgb, rgba};
 use crate::sim::{self, Ent, Game, Kind, Material, Phase, Shape, V2};
 
-/// Maps world meters (y up) to screen pixels (y down).
+/// Maps world meters (y up) to screen pixels (y down), optionally mirrored
+/// left-to-right so the sling sits on the right.
 #[derive(Clone, Copy)]
 pub struct View {
     pub s: f32,
     pub ox: f32,
     pub oy: f32,
+    /// Screen width to mirror across, when mirrored.
+    pub mirror: Option<f32>,
 }
 
 pub const VIEW_W: f32 = 42.0;
@@ -23,16 +26,27 @@ const VIEW_X0: f32 = -1.0;
 const VIEW_Y0: f32 = -1.5;
 
 impl View {
-    pub fn fit(shake: Vec2) -> Self {
+    pub fn fit(shake: Vec2, mirrored: bool) -> Self {
         let (sw, sh) = (screen_width(), screen_height());
         let s = (sw / VIEW_W).min(sh / VIEW_H);
         let ox = (sw - VIEW_W * s) / 2.0 - VIEW_X0 * s + shake.x;
         // Anchor the bottom of the view to the bottom of the screen.
         let oy = sh + VIEW_Y0 * s + shake.y;
-        View { s, ox, oy }
+        View {
+            s,
+            ox,
+            oy,
+            mirror: mirrored.then_some(sw),
+        }
     }
     pub fn p(&self, x: f32, y: f32) -> Vec2 {
-        vec2(self.ox + x * self.s, self.oy - y * self.s)
+        let sx = self.ox + x * self.s;
+        let sx = self.mirror.map_or(sx, |w| w - sx);
+        vec2(sx, self.oy - y * self.s)
+    }
+    /// Screen-space rotation for something rotated `angle` in the world.
+    pub fn rotation(&self, angle: f32) -> f32 {
+        if self.mirror.is_some() { angle } else { -angle }
     }
     pub fn v(&self, v: V2) -> Vec2 {
         self.p(v.x, v.y)
@@ -349,7 +363,7 @@ pub fn block(view: &View, e: &Ent) {
                 let c = view.v(e.pos);
                 let size = font_size(w * 1.05 * view.s);
                 let dims = measure_text("TNT", None, size, 1.0);
-                let rot = -e.angle;
+                let rot = view.rotation(e.angle);
                 let (s, co) = rot.sin_cos();
                 let (ox, oy) = (-dims.width / 2.0, dims.offset_y / 2.0);
                 draw_text_ex(

@@ -31,6 +31,8 @@ procedurally, so there are no asset files.
 12 levels, from "Straw Hut" to "Big Bad Boss".
 
 Controls: press anywhere, pull back, release. Mouse and touch both work.
+Left-handed? The mirror button (◀|▶, on the title screen and in-game) flips the game so the
+sling is on the right and you fire to the left. The choice is remembered on that device.
 
 ## Run
 

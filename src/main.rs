@@ -60,6 +60,8 @@ struct App {
     laugh: f32,
     trail_t: f32,
     aim_start: Option<Vec2>,
+    /// Left-handed mode: sling on the right, firing left.
+    mirrored: bool,
     time: f32,
 }
 
@@ -125,6 +127,7 @@ enum Icon {
     Restart,
     Expand,
     Collapse,
+    Mirror,
 }
 
 /// Draws a rounded button with a line icon; true if tapped this frame.
@@ -183,6 +186,18 @@ fn icon_button(rect: Rect, icon: Icon, input: &Input, accent: Color) -> bool {
                 draw_circle(pivot.x, pivot.y, w / 2.0, WHITE);
             }
         }
+        Icon::Mirror => {
+            // Two arrowheads pointing away from a centre line.
+            line(c + vec2(0.0, -k * 1.05), c + vec2(0.0, k * 1.05));
+            for sx in [-1.0, 1.0] {
+                draw_triangle(
+                    c + vec2(sx * k * 1.1, 0.0),
+                    c + vec2(sx * k * 0.3, -k * 0.7),
+                    c + vec2(sx * k * 0.3, k * 0.7),
+                    WHITE,
+                );
+            }
+        }
     }
     input.pressed.is_some_and(|p| rect.contains(p))
 }
@@ -202,16 +217,27 @@ fn fullscreen_button(rect: Rect, input: &Input) -> bool {
     tapped
 }
 
-/// Title-screen fullscreen toggle, Install button and iOS install hint.
-fn menu_corner_controls(input: &Input) {
+/// The left-handed (mirror) toggle; highlighted while on. True if tapped.
+fn mirror_button(rect: Rect, input: &Input, on: bool) -> bool {
+    icon_button(rect, Icon::Mirror, input, if on { ORANGE } else { SLATE })
+}
+
+/// Title-screen corner: fullscreen, mirror, Install and the iOS install hint.
+/// Returns true if the mirror toggle was tapped.
+fn menu_corner_controls(input: &Input, mirrored: bool) -> bool {
     let (sw, sh) = (screen_width(), screen_height());
     let u = ui_unit();
     let bs = u * 0.09;
-    let full = Rect::new(sw - u * 0.03 - bs, u * 0.03, bs, bs);
-    fullscreen_button(full, input);
+    let mut right = sw - u * 0.03;
+    if platform::fullscreen() != platform::Fullscreen::Unavailable {
+        fullscreen_button(Rect::new(right - bs, u * 0.03, bs, bs), input);
+        right -= bs * 1.2;
+    }
+    let mirror = Rect::new(right - bs, u * 0.03, bs, bs);
+    let toggled = mirror_button(mirror, input, mirrored);
     match platform::install() {
         platform::Install::Prompt => {
-            let r = Rect::new(full.x - bs * 0.3 - bs * 2.4, full.y, bs * 2.4, bs);
+            let r = Rect::new(mirror.x - bs * 0.3 - bs * 2.4, mirror.y, bs * 2.4, bs);
             platform::hotspot(platform::Hotspot::Install, r);
             if button(r, "Install", input, GREEN) {
                 platform::activate(platform::Hotspot::Install);
@@ -228,6 +254,7 @@ fn menu_corner_controls(input: &Input) {
         }
         platform::Install::Unavailable => {}
     }
+    toggled
 }
 
 const GREEN: Color = Color::new(0.35, 0.68, 0.3, 1.0);
@@ -247,8 +274,15 @@ impl App {
             laugh: 0.0,
             trail_t: 0.0,
             aim_start: None,
+            mirrored: platform::pref(platform::Pref::Mirror),
             time: 0.0,
         }
+    }
+
+    fn toggle_mirror(&mut self) {
+        self.mirrored = !self.mirrored;
+        self.aim_start = None;
+        platform::set_pref(platform::Pref::Mirror, self.mirrored);
     }
 
     fn start(&mut self, idx: usize) {
@@ -274,7 +308,7 @@ impl App {
             Vec2::ZERO
         };
         self.shake = (self.shake - dt * 3.0).max(0.0);
-        let view = View::fit(shake);
+        let view = View::fit(shake, self.mirrored);
         render::background(&view, self.time);
 
         match &self.screen {
@@ -289,7 +323,7 @@ impl App {
         draw_rectangle(0.0, 0.0, sw, sh, Color::new(0.0, 0.0, 0.0, 0.15));
 
         // A couple of mascots
-        let deco = View::fit(Vec2::ZERO);
+        let deco = View::fit(Vec2::ZERO, self.mirrored);
         let hop = (self.time * 4.0).sin().abs();
         let mut grunt = Anim::new(self.time, 3, Mood::Yell, V2::new(1.0, 0.3));
         grunt.stretch = (hop - 0.5) * 0.2;
@@ -329,7 +363,9 @@ impl App {
             WHITE,
         );
 
-        menu_corner_controls(input);
+        if menu_corner_controls(input, self.mirrored) {
+            self.toggle_mirror();
+        }
 
         let n = self.levels.len();
         let cols = n.div_ceil(2).max(1);
@@ -408,6 +444,7 @@ impl App {
             Nav::Menu => self.screen = Screen::Menu,
             Nav::Restart => self.start(idx),
             Nav::Next => self.start(idx + 1),
+            Nav::Mirror => self.toggle_mirror(),
         }
     }
 
@@ -419,7 +456,8 @@ impl App {
                 }
                 if let (Some(start), Some(cur)) = (self.aim_start, input.down) {
                     let d = (cur - start) / view.s;
-                    let pull = V2::new(d.x, -d.y).clamp_length_max(sim::MAX_PULL);
+                    let dx = if view.mirror.is_some() { -d.x } else { d.x };
+                    let pull = V2::new(dx, -d.y).clamp_length_max(sim::MAX_PULL);
                     game.aim = Some(pull);
                 }
                 if input.released {
@@ -726,11 +764,15 @@ impl App {
             render::text_centered(hint, sw / 2.0, sh * 0.9, u * 0.05, rgb(255, 236, 150));
         }
 
-        fullscreen_button(hud.full, input);
+        if let Some(full) = hud.full {
+            fullscreen_button(full, input);
+        }
         if icon_button(hud.menu, Icon::Menu, input, SLATE) {
             Nav::Menu
         } else if icon_button(hud.retry, Icon::Restart, input, SLATE) {
             Nav::Restart
+        } else if mirror_button(hud.mirror, input, self.mirrored) {
+            Nav::Mirror
         } else {
             Nav::Stay
         }
@@ -811,29 +853,40 @@ enum Nav {
     Menu,
     Restart,
     Next,
+    Mirror,
 }
 
-/// The always-visible menu / retry / fullscreen buttons in the top-left corner.
+/// The always-visible buttons along the top-left: menu, retry, mirror and
+/// (where the platform supports it) fullscreen.
 struct HudButtons {
     menu: Rect,
     retry: Rect,
-    full: Rect,
+    mirror: Rect,
+    full: Option<Rect>,
 }
 
 impl HudButtons {
     fn new() -> Self {
         let u = ui_unit();
         let bs = u * 0.09;
+        let slot = |i: f32| Rect::new(u * 0.03 + bs * 1.2 * i, u * 0.03, bs, bs);
         HudButtons {
-            menu: Rect::new(u * 0.03, u * 0.03, bs, bs),
-            retry: Rect::new(u * 0.03 + bs * 1.2, u * 0.03, bs, bs),
-            full: Rect::new(u * 0.03 + bs * 2.4, u * 0.03, bs, bs),
+            menu: slot(0.0),
+            retry: slot(1.0),
+            mirror: slot(2.0),
+            full: (platform::fullscreen() != platform::Fullscreen::Unavailable).then(|| slot(3.0)),
         }
     }
     fn contains(&self, p: Vec2) -> bool {
-        let full =
-            platform::fullscreen() != platform::Fullscreen::Unavailable && self.full.contains(p);
-        self.menu.contains(p) || self.retry.contains(p) || full
+        [
+            Some(self.menu),
+            Some(self.retry),
+            Some(self.mirror),
+            self.full,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|r| r.contains(p))
     }
 }
 
@@ -877,6 +930,7 @@ async fn render_icon(path: &str, scale: f32) {
         let pig = sim::PigKind::Grunt;
         let s = r_px / pig.radius();
         let view = View {
+            mirror: None,
             s,
             ox: x0 + side / 2.0,
             oy: side / 2.0 + r_px * 0.12,
@@ -922,6 +976,9 @@ async fn main() {
                 .and_then(|v| v.parse().ok()),
         })
     };
+    if std::env::var("GRUMPY_MIRROR").is_ok_and(|v| v == "1") {
+        app.mirrored = true;
+    }
     if let Some(level) = std::env::var("GRUMPY_LEVEL")
         .ok()
         .and_then(|l| l.parse::<usize>().ok())
