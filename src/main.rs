@@ -39,6 +39,9 @@ struct Popup {
     pos: Vec2,
     text: String,
     life: f32,
+    /// Text height in world meters.
+    size: f32,
+    color: Color,
 }
 
 enum Screen {
@@ -199,6 +202,34 @@ fn fullscreen_button(rect: Rect, input: &Input) -> bool {
     tapped
 }
 
+/// Title-screen fullscreen toggle, Install button and iOS install hint.
+fn menu_corner_controls(input: &Input) {
+    let (sw, sh) = (screen_width(), screen_height());
+    let u = ui_unit();
+    let bs = u * 0.09;
+    let full = Rect::new(sw - u * 0.03 - bs, u * 0.03, bs, bs);
+    fullscreen_button(full, input);
+    match platform::install() {
+        platform::Install::Prompt => {
+            let r = Rect::new(full.x - bs * 0.3 - bs * 2.4, full.y, bs * 2.4, bs);
+            platform::hotspot(platform::Hotspot::Install, r);
+            if button(r, "Install", input, GREEN) {
+                platform::activate(platform::Hotspot::Install);
+            }
+        }
+        platform::Install::ShareSheet => {
+            render::text_centered(
+                "Play it like an app: tap Share, then Add to Home Screen",
+                sw / 2.0,
+                sh * 0.9,
+                u * 0.032,
+                WHITE,
+            );
+        }
+        platform::Install::Unavailable => {}
+    }
+}
+
 const GREEN: Color = Color::new(0.35, 0.68, 0.3, 1.0);
 const ORANGE: Color = Color::new(0.93, 0.55, 0.2, 1.0);
 const SLATE: Color = Color::new(0.35, 0.38, 0.48, 1.0);
@@ -272,59 +303,55 @@ impl App {
         let hog = Anim::new(self.time, 5, Mood::Idle, V2::new(1.0, 0.2));
         art::pig(&deco, sim::PigKind::Hog, V2::new(4.5, 0.7), 0.0, &hog);
         let smug = Anim::new(self.time, 9, Mood::Idle, V2::new(-1.0, -0.2));
-        art::wolf(&deco, V2::new(35.0, 0.7), 0.0, 0.7, 1.0, 0.0, &smug);
+        art::wolf(
+            &deco,
+            sim::WolfKind::Boss,
+            V2::new(35.0, 0.95),
+            0.0,
+            0.95,
+            1.0,
+            0.0,
+            &smug,
+        );
 
         render::text_centered(
             "GRUMPY PIGS",
             sw / 2.0,
-            sh * 0.22,
+            sh * 0.17,
             u * 0.14,
             Color::from_rgba(255, 170, 190, 255),
         );
         render::text_centered(
             "Those wolves took our mud. Get it back.",
             sw / 2.0,
-            sh * 0.30,
+            sh * 0.245,
             u * 0.045,
             WHITE,
         );
 
-        let bs = u * 0.09;
-        let full = Rect::new(sw - u * 0.03 - bs, u * 0.03, bs, bs);
-        fullscreen_button(full, input);
-        match platform::install() {
-            platform::Install::Prompt => {
-                let r = Rect::new(full.x - bs * 0.3 - bs * 2.4, full.y, bs * 2.4, bs);
-                platform::hotspot(platform::Hotspot::Install, r);
-                if button(r, "Install", input, GREEN) {
-                    platform::activate(platform::Hotspot::Install);
-                }
-            }
-            platform::Install::ShareSheet => {
-                render::text_centered(
-                    "Play it like an app: tap Share, then Add to Home Screen",
-                    sw / 2.0,
-                    sh * 0.89,
-                    u * 0.032,
-                    WHITE,
-                );
-            }
-            platform::Install::Unavailable => {}
-        }
+        menu_corner_controls(input);
 
         let n = self.levels.len();
-        let bw = u * 0.22;
-        let gap = u * 0.04;
-        let total = n as f32 * bw + (n - 1) as f32 * gap;
+        let cols = n.div_ceil(2).max(1);
+        let bw = (u * 0.15).min(sw * 0.8 / cols as f32 - u * 0.03);
+        let gap = u * 0.035;
+        let pitch_y = bw + u * 0.1;
+        let total = cols as f32 * bw + (cols - 1) as f32 * gap;
         let x0 = (sw - total) / 2.0;
-        let y = sh * 0.42;
+        let y0 = sh * 0.31;
         let mut chosen = None;
         for i in 0..n {
-            let r = Rect::new(x0 + i as f32 * (bw + gap), y, bw, bw);
+            let (row, col) = (i / cols, i % cols);
+            let r = Rect::new(
+                x0 + col as f32 * (bw + gap),
+                y0 + row as f32 * pitch_y,
+                bw,
+                bw,
+            );
             if button(r, &format!("{}", i + 1), input, ORANGE) {
                 chosen = Some(i);
             }
-            let label_size = u * 0.03;
+            let label_size = u * 0.024;
             render::text_centered(
                 self.levels[i].name,
                 r.center().x,
@@ -335,15 +362,15 @@ impl App {
             for s in 0..3u8 {
                 let c = vec2(
                     r.center().x + (f32::from(s) - 1.0) * bw * 0.3,
-                    r.bottom() + label_size * 3.0,
+                    r.bottom() + label_size * 2.6,
                 );
-                render::star(c, bw * 0.12, s < self.best_stars[i]);
+                render::star(c, bw * 0.1, s < self.best_stars[i]);
             }
         }
         render::text_centered(
             "Pull back anywhere to aim  -  release to fling  -  tap mid-air for powers",
             sw / 2.0,
-            sh * 0.82,
+            sh * 0.845,
             u * 0.035,
             WHITE,
         );
@@ -431,9 +458,12 @@ impl App {
                         Kind::Block(Material::Straw) => rgb(236, 205, 110),
                         Kind::Block(Material::Wood) => rgb(170, 110, 60),
                         Kind::Block(Material::Brick) => rgb(178, 82, 64),
+                        Kind::Block(Material::Ice) => rgb(210, 240, 255),
+                        Kind::Block(Material::Tnt) => rgb(200, 60, 40),
+                        Kind::Block(Material::Stone) => rgb(150, 144, 138),
                         _ => rgb(150, 150, 165),
                     };
-                    let n = if kind == Kind::Wolf { 22 } else { 12 };
+                    let n = if kind.is_wolf() { 22 } else { 12 };
                     for _ in 0..n {
                         let vel = vec2(rand::gen_range(-5.0, 5.0), rand::gen_range(0.0, 7.0));
                         let life = rand::gen_range(0.5, 1.1);
@@ -444,9 +474,11 @@ impl App {
                             pos: vec2(pos.x, pos.y + 0.6),
                             text: points.to_string(),
                             life: 1.2,
+                            size: 0.9,
+                            color: WHITE,
                         });
                     }
-                    if kind == Kind::Wolf {
+                    if kind.is_wolf() {
                         self.shake = self.shake.max(0.4);
                     }
                 }
@@ -470,12 +502,21 @@ impl App {
                         self.spawn(pos, vel, 0.4, 0.08, Color::new(1.0, 1.0, 0.9, 1.0), true);
                     }
                 }
-                Event::Dash { pos } => {
-                    for _ in 0..20 {
-                        let vel = vec2(rand::gen_range(-4.0, 1.0), rand::gen_range(-2.0, 2.0));
-                        let size = rand::gen_range(0.1, 0.25);
-                        self.spawn(pos, vel, 0.5, size, Color::new(1.0, 0.85, 0.4, 1.0), false);
-                    }
+                Event::Power { pos, kind } => self.power_effect(pos, kind),
+                Event::Combo { pos, count, bonus } => {
+                    let word = match count {
+                        2 => "DOUBLE KO!",
+                        3 => "TRIPLE KO!",
+                        _ => "MEGA KO!",
+                    };
+                    self.popups.push(Popup {
+                        pos: vec2(pos.x, pos.y + 1.8),
+                        text: format!("{word} +{bonus}"),
+                        life: 1.8,
+                        size: 1.4,
+                        color: rgb(255, 222, 90),
+                    });
+                    self.shake = self.shake.max(0.6);
                 }
                 Event::Poof { pos } => {
                     if wolves_alive > 0 {
@@ -489,6 +530,28 @@ impl App {
                 }
                 Event::Launch => {}
             }
+        }
+    }
+
+    /// Particles for a pig's mid-air power.
+    fn power_effect(&mut self, pos: V2, kind: sim::PigKind) {
+        let (color, n, speed) = match kind {
+            sim::PigKind::Dasher => (rgb(255, 216, 100), 20, 4.0),
+            sim::PigKind::Litter => (rgb(255, 214, 190), 24, 3.0),
+            sim::PigKind::Thumper => (rgb(230, 230, 240), 18, 2.5),
+            sim::PigKind::Puffer => (rgb(170, 240, 200), 30, 5.0),
+            _ => return,
+        };
+        for i in 0..n {
+            let a = if kind == sim::PigKind::Thumper {
+                // Speed lines streaming upward.
+                std::f32::consts::FRAC_PI_2 + rand::gen_range(-0.3, 0.3)
+            } else {
+                i as f32 / n as f32 * std::f32::consts::TAU
+            };
+            let vel = vec2(a.cos(), a.sin()) * speed * rand::gen_range(0.6, 1.2);
+            let size = rand::gen_range(0.1, 0.25);
+            self.spawn(pos, vel, 0.5, size, color, false);
         }
     }
 
@@ -529,7 +592,7 @@ impl App {
             }
             match e.kind {
                 Kind::Block(_) | Kind::Rock => render::block(view, e),
-                Kind::Wolf => {
+                Kind::Wolf(wolf_kind) => {
                     let sim::Shape::Ball { r } = e.shape else {
                         continue;
                     };
@@ -544,7 +607,16 @@ impl App {
                         Mood::Idle
                     };
                     anim.look = pig_pos.unwrap_or(Game::pouch()) - e.pos;
-                    art::wolf(view, e.pos, e.angle, r, e.hp_frac(), e.hurt_flash, &anim);
+                    art::wolf(
+                        view,
+                        wolf_kind,
+                        e.pos,
+                        e.angle,
+                        r,
+                        e.hp_frac(),
+                        e.hurt_flash,
+                        &anim,
+                    );
                 }
                 Kind::Pig(k) => {
                     let mine = flight.filter(|f| f.ent == i);
@@ -561,6 +633,7 @@ impl App {
                     {
                         anim.glow = f.since_impact.map_or(0.0, |s| (s / 1.2).min(1.0));
                     }
+                    anim.scale = e.radius() / k.radius();
                     art::pig(view, k, e.pos, e.angle, &anim);
                 }
             }
@@ -612,13 +685,7 @@ impl App {
             p.pos.y += dt * 1.2;
             let q = view.p(p.pos.x, p.pos.y);
             let a = p.life.clamp(0.0, 1.0);
-            render::text_centered(
-                &p.text,
-                q.x,
-                q.y,
-                view.s * 0.9,
-                Color::new(1.0, 1.0, 1.0, a),
-            );
+            render::text_centered(&p.text, q.x, q.y, view.s * p.size, gfx::alpha(p.color, a));
             p.life > 0.0
         });
     }
@@ -778,6 +845,8 @@ struct Shot {
     frames: u32,
     launch: Option<V2>,
     aim: Option<V2>,
+    /// `GRUMPY_TAP`: use the pig's power this many seconds after launch.
+    tap: Option<f32>,
 }
 
 fn pull_from_env(var: &str) -> Option<V2> {
@@ -848,6 +917,9 @@ async fn main() {
                 .unwrap_or(90),
             launch: pull_from_env("GRUMPY_LAUNCH"),
             aim: pull_from_env("GRUMPY_AIM"),
+            tap: std::env::var("GRUMPY_TAP")
+                .ok()
+                .and_then(|v| v.parse().ok()),
         })
     };
     if let Some(level) = std::env::var("GRUMPY_LEVEL")
@@ -857,12 +929,19 @@ async fn main() {
         app.start(level.saturating_sub(1).min(app.levels.len() - 1));
     }
     let mut frame = 0u32;
+    let mut launched_at = None;
     loop {
         if let (Some(shot), Screen::Play { game, .. }) = (&shot, &mut app.screen) {
             if frame == 80
                 && let Some(p) = shot.launch
             {
                 game.launch(p);
+                launched_at = Some(game.time);
+            }
+            if let (Some(tap), Some(t0)) = (shot.tap, launched_at)
+                && game.time - t0 >= tap
+            {
+                game.ability();
             }
             if shot.aim.is_some() && game.phase == Phase::Aiming {
                 game.aim = shot.aim;

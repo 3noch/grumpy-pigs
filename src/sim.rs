@@ -16,20 +16,30 @@ const DT: f32 = 1.0 / 60.0;
 const GRACE: f32 = 1.2;
 /// Velocity changes below this (m/s per step) are harmless.
 const DV_THRESHOLD: f32 = 2.0;
+/// Wolves knocked out within this many seconds of each other form a combo.
+const COMBO_WINDOW: f32 = 1.5;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Material {
     Straw,
     Wood,
     Brick,
+    /// Slippery and brittle.
+    Ice,
+    /// Explodes when destroyed.
+    Tnt,
+    /// Boulders: heavy, round, nearly indestructible.
+    Stone,
 }
 
 impl Material {
     fn density(self) -> f32 {
         match self {
             Material::Straw => 0.4,
-            Material::Wood => 1.0,
+            Material::Wood | Material::Tnt => 1.0,
+            Material::Ice => 0.9,
             Material::Brick => 2.6,
+            Material::Stone => 3.0,
         }
     }
     fn hp(self) -> f32 {
@@ -37,13 +47,26 @@ impl Material {
             Material::Straw => 3.5,
             Material::Wood => 8.0,
             Material::Brick => 26.0,
+            Material::Ice => 2.2,
+            Material::Tnt => 2.0,
+            Material::Stone => 60.0,
+        }
+    }
+    fn friction(self) -> f32 {
+        match self {
+            Material::Ice => 0.06,
+            Material::Stone => 0.9,
+            _ => 0.7,
         }
     }
     pub fn points(self) -> u32 {
         match self {
             Material::Straw => 100,
+            Material::Ice => 150,
             Material::Wood => 300,
+            Material::Tnt => 500,
             Material::Brick => 600,
+            Material::Stone => 800,
         }
     }
 }
@@ -58,28 +81,86 @@ pub enum PigKind {
     Boomer,
     /// Big, heavy, unstoppable.
     Hog,
+    /// Tap to split into three piglets.
+    Litter,
+    /// One of the Litter's piglets.
+    Piglet,
+    /// Tap to stop dead and slam straight down.
+    Thumper,
+    /// Tap to puff up to twice the size, shoving everything aside.
+    Puffer,
 }
 
 impl PigKind {
     pub fn radius(self) -> f32 {
         match self {
             PigKind::Hog => 0.7,
-            PigKind::Dasher => 0.4,
+            PigKind::Thumper => 0.55,
+            PigKind::Dasher | PigKind::Litter => 0.4,
+            PigKind::Piglet => 0.27,
             _ => 0.45,
         }
     }
     fn density(self) -> f32 {
         match self {
             PigKind::Hog => 6.0,
+            PigKind::Thumper => 7.0,
             PigKind::Boomer => 3.5,
+            PigKind::Piglet => 4.0,
+            PigKind::Puffer => 2.5,
             _ => 3.0,
         }
     }
     pub fn hint(self) -> &'static str {
         match self {
-            PigKind::Grunt | PigKind::Hog => "",
+            PigKind::Grunt | PigKind::Hog | PigKind::Piglet => "",
             PigKind::Dasher => "Tap to DASH!",
             PigKind::Boomer => "Tap to BOOM!",
+            PigKind::Litter => "Tap to SPLIT!",
+            PigKind::Thumper => "Tap to SLAM!",
+            PigKind::Puffer => "Tap to PUFF!",
+        }
+    }
+    /// Whether tapping mid-flight does something.
+    pub fn has_power(self) -> bool {
+        !self.hint().is_empty()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum WolfKind {
+    /// Small and fragile.
+    Pup,
+    Wolf,
+    /// Wears a cooking pot: twice as tough.
+    Helmet,
+    /// The Big Bad Wolf.
+    Boss,
+}
+
+impl WolfKind {
+    pub fn radius(self) -> f32 {
+        match self {
+            WolfKind::Pup => 0.38,
+            WolfKind::Wolf => 0.52,
+            WolfKind::Helmet => 0.55,
+            WolfKind::Boss => 0.95,
+        }
+    }
+    fn hp(self) -> f32 {
+        match self {
+            WolfKind::Pup => 3.0,
+            WolfKind::Wolf => 6.0,
+            WolfKind::Helmet => 13.0,
+            WolfKind::Boss => 24.0,
+        }
+    }
+    pub fn points(self) -> u32 {
+        match self {
+            WolfKind::Pup => 3000,
+            WolfKind::Wolf => 5000,
+            WolfKind::Helmet => 7000,
+            WolfKind::Boss => 15000,
         }
     }
 }
@@ -87,10 +168,19 @@ impl PigKind {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Kind {
     Block(Material),
-    Wolf,
+    Wolf(WolfKind),
     Pig(PigKind),
     /// Immovable terrain.
     Rock,
+}
+
+impl Kind {
+    pub fn is_wolf(self) -> bool {
+        matches!(self, Kind::Wolf(_))
+    }
+    pub fn is_pig(self) -> bool {
+        matches!(self, Kind::Pig(_))
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -101,6 +191,7 @@ pub enum Shape {
 
 pub struct Ent {
     pub handle: RigidBodyHandle,
+    col: ColliderHandle,
     pub kind: Kind,
     pub shape: Shape,
     pub hp: f32,
@@ -117,12 +208,21 @@ pub struct Ent {
     pub alive: bool,
     /// Stable per-entity seed used for cosmetic variation (cracks etc).
     pub seed: u32,
+    /// Puffer inflation progress 0..1, once triggered.
+    pub puff: Option<f32>,
     prev_v: V2,
 }
 
 impl Ent {
     pub fn hp_frac(&self) -> f32 {
         (self.hp / self.max_hp).clamp(0.0, 1.0)
+    }
+    /// Current radius of a round entity (0 for boxes).
+    pub fn radius(&self) -> f32 {
+        match self.shape {
+            Shape::Ball { r } => r,
+            Shape::Box { .. } => 0.0,
+        }
     }
 }
 
@@ -138,12 +238,34 @@ pub struct Flight {
 
 #[derive(Clone, Debug)]
 pub enum Event {
-    Destroyed { pos: V2, kind: Kind, points: u32 },
-    Explosion { pos: V2, radius: f32 },
-    Hit { pos: V2, strength: f32 },
-    Dash { pos: V2 },
+    Destroyed {
+        pos: V2,
+        kind: Kind,
+        points: u32,
+    },
+    Explosion {
+        pos: V2,
+        radius: f32,
+    },
+    Hit {
+        pos: V2,
+        strength: f32,
+    },
+    /// A pig used its power.
+    Power {
+        pos: V2,
+        kind: PigKind,
+    },
+    /// Several wolves knocked out in quick succession.
+    Combo {
+        pos: V2,
+        count: u32,
+        bonus: u32,
+    },
     Launch,
-    Poof { pos: V2 },
+    Poof {
+        pos: V2,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -155,14 +277,32 @@ pub struct BlockDef {
     pub mat: Material,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct WolfDef {
+    pub x: f32,
+    pub y: f32,
+    pub r: f32,
+    pub kind: WolfKind,
+}
+
+/// Fixed terrain: a box, optionally tilted into a ramp.
+#[derive(Clone, Copy, Debug)]
+pub struct RockDef {
+    pub cx: f32,
+    pub cy: f32,
+    pub hw: f32,
+    pub hh: f32,
+    pub angle: f32,
+}
+
 #[derive(Clone, Debug)]
 pub struct Level {
     pub name: &'static str,
     pub blocks: Vec<BlockDef>,
-    /// (x, y, radius)
-    pub wolves: Vec<(f32, f32, f32)>,
-    /// Fixed terrain boxes: (cx, cy, hw, hh)
-    pub rocks: Vec<(f32, f32, f32, f32)>,
+    pub wolves: Vec<WolfDef>,
+    pub rocks: Vec<RockDef>,
+    /// Round stone boulders: (x, y, radius).
+    pub boulders: Vec<(f32, f32, f32)>,
     pub pigs: Vec<PigKind>,
 }
 
@@ -199,6 +339,15 @@ pub struct Game {
     /// Current sling pull (offset from pouch), set by input while aiming.
     pub aim: Option<V2>,
     acc: f32,
+    /// Explosions queued by destroyed TNT, set off after this step's removals.
+    blasts: Vec<V2>,
+    combo: u32,
+    last_ko: f32,
+}
+
+fn rotate(v: V2, a: f32) -> V2 {
+    let (s, c) = a.sin_cos();
+    V2::new(v.x * c - v.y * s, v.x * s + v.y * c)
 }
 
 impl Game {
@@ -218,6 +367,9 @@ impl Game {
             events: Vec::new(),
             aim: None,
             acc: 0.0,
+            blasts: Vec::new(),
+            combo: 0,
+            last_ko: f32::NEG_INFINITY,
         };
 
         // Ground: top surface at y = 0.
@@ -225,45 +377,68 @@ impl Game {
         g.world
             .insert(ground, ColliderBuilder::cuboid(200.0, 5.0).friction(0.9));
 
-        for &(cx, cy, hw, hh) in &level.rocks {
-            let body = RigidBodyBuilder::fixed().translation(V2::new(cx, cy));
-            let (h, _) = g
-                .world
-                .insert(body, ColliderBuilder::cuboid(hw, hh).friction(0.9));
-            g.push(h, Kind::Rock, Shape::Box { hw, hh }, f32::INFINITY);
+        for r in &level.rocks {
+            let body = RigidBodyBuilder::fixed()
+                .translation(V2::new(r.cx, r.cy))
+                .rotation(r.angle);
+            let col = ColliderBuilder::cuboid(r.hw, r.hh).friction(0.9);
+            let (h, c) = g.world.insert(body, col);
+            let shape = Shape::Box { hw: r.hw, hh: r.hh };
+            g.push(h, c, Kind::Rock, shape, f32::INFINITY);
         }
         for b in &level.blocks {
             let body = RigidBodyBuilder::dynamic().translation(V2::new(b.cx, b.cy));
             let col = ColliderBuilder::cuboid(b.hw, b.hh)
                 .density(b.mat.density())
-                .friction(0.7)
+                .friction(b.mat.friction())
                 .restitution(0.05);
-            let (h, _) = g.world.insert(body, col);
-            g.push(
-                h,
-                Kind::Block(b.mat),
-                Shape::Box { hw: b.hw, hh: b.hh },
-                b.mat.hp(),
-            );
+            let (h, c) = g.world.insert(body, col);
+            let shape = Shape::Box { hw: b.hw, hh: b.hh };
+            g.push(h, c, Kind::Block(b.mat), shape, b.mat.hp());
             g.max_score += b.mat.points();
         }
-        for &(x, y, r) in &level.wolves {
+        for &(x, y, r) in &level.boulders {
             let body = RigidBodyBuilder::dynamic()
                 .translation(V2::new(x, y))
-                .angular_damping(1.0);
+                .angular_damping(0.1);
             let col = ColliderBuilder::ball(r)
+                .density(Material::Stone.density())
+                .friction(Material::Stone.friction())
+                .restitution(0.1);
+            let (h, c) = g.world.insert(body, col);
+            let kind = Kind::Block(Material::Stone);
+            g.push(h, c, kind, Shape::Ball { r }, Material::Stone.hp());
+        }
+        for w in &level.wolves {
+            let body = RigidBodyBuilder::dynamic()
+                .translation(V2::new(w.x, w.y))
+                .angular_damping(1.0);
+            let col = ColliderBuilder::ball(w.r)
                 .density(1.0)
                 .friction(0.8)
                 .restitution(0.1);
-            let (h, _) = g.world.insert(body, col);
-            g.push(h, Kind::Wolf, Shape::Ball { r }, 6.0);
-            g.max_score += 5000;
+            let (h, c) = g.world.insert(body, col);
+            g.push(
+                h,
+                c,
+                Kind::Wolf(w.kind),
+                Shape::Ball { r: w.r },
+                w.kind.hp(),
+            );
+            g.max_score += w.kind.points();
         }
         g.max_score += 10_000 * u32::try_from(level.pigs.len().saturating_sub(1)).unwrap_or(0);
         g
     }
 
-    fn push(&mut self, handle: RigidBodyHandle, kind: Kind, shape: Shape, hp: f32) -> usize {
+    fn push(
+        &mut self,
+        handle: RigidBodyHandle,
+        col: ColliderHandle,
+        kind: Kind,
+        shape: Shape,
+        hp: f32,
+    ) -> usize {
         let body = &self.world.bodies[handle];
         let seed = u32::try_from(self.ents.len())
             .unwrap_or(0)
@@ -271,6 +446,7 @@ impl Game {
             .rotate_left(7);
         self.ents.push(Ent {
             handle,
+            col,
             kind,
             shape,
             hp,
@@ -278,12 +454,13 @@ impl Game {
             pos: body.translation(),
             angle: body.rotation().angle(),
             hurt_flash: 0.0,
-            vel: V2::ZERO,
+            vel: body.linvel(),
             impact: 0.0,
             impact_dir: V2::X,
             alive: true,
             seed,
-            prev_v: V2::ZERO,
+            puff: None,
+            prev_v: body.linvel(),
         });
         self.ents.len() - 1
     }
@@ -291,7 +468,7 @@ impl Game {
     pub fn wolves_alive(&self) -> usize {
         self.ents
             .iter()
-            .filter(|e| e.alive && e.kind == Kind::Wolf)
+            .filter(|e| e.alive && e.kind.is_wolf())
             .count()
     }
 
@@ -346,6 +523,21 @@ impl Game {
             .collect()
     }
 
+    fn spawn_pig(&mut self, kind: PigKind, pos: V2, vel: V2) -> usize {
+        let r = kind.radius();
+        let body = RigidBodyBuilder::dynamic()
+            .translation(pos)
+            .linvel(vel)
+            .ccd_enabled(true)
+            .angular_damping(1.5);
+        let col = ColliderBuilder::ball(r)
+            .density(kind.density())
+            .friction(0.6)
+            .restitution(0.3);
+        let (h, c) = self.world.insert(body, col);
+        self.push(h, c, Kind::Pig(kind), Shape::Ball { r }, f32::INFINITY)
+    }
+
     /// Fire the current pig. `pull` is the offset from the pouch.
     pub fn launch(&mut self, pull: V2) {
         if self.phase != Phase::Aiming || self.pigs_left.is_empty() {
@@ -353,19 +545,7 @@ impl Game {
         }
         let pull = pull.clamp_length_max(MAX_PULL);
         let kind = self.pigs_left.remove(0);
-        let r = kind.radius();
-        let body = RigidBodyBuilder::dynamic()
-            .translation(Self::pouch() + pull)
-            .linvel(Self::launch_velocity(pull))
-            .ccd_enabled(true)
-            .angular_damping(1.5);
-        let col = ColliderBuilder::ball(r)
-            .density(kind.density())
-            .friction(0.6)
-            .restitution(0.3);
-        let (h, _) = self.world.insert(body, col);
-        let idx = self.push(h, Kind::Pig(kind), Shape::Ball { r }, f32::INFINITY);
-        self.ents[idx].prev_v = Self::launch_velocity(pull);
+        let idx = self.spawn_pig(kind, Self::pouch() + pull, Self::launch_velocity(pull));
         self.aim = None;
         self.phase = Phase::Flying {
             ent: idx,
@@ -388,41 +568,62 @@ impl Game {
         let Kind::Pig(kind) = self.ents[ent].kind else {
             return;
         };
+        if !kind.has_power() {
+            return;
+        }
+        let pos = self.ents[ent].pos;
+        let handle = self.ents[ent].handle;
+        let v = self.world.bodies[handle].linvel();
         match kind {
             PigKind::Dasher => {
-                let body = &mut self.world.bodies[self.ents[ent].handle];
-                let v = body.linvel();
-                let dir = if v.length() > 0.1 {
-                    v.normalize()
-                } else {
-                    V2::X
-                };
+                let dir = v.normalize_or(V2::X);
                 let speed = (v.length() * 1.8).max(24.0);
-                body.set_linvel(dir * speed, true);
-                self.events.push(Event::Dash {
-                    pos: self.ents[ent].pos,
-                });
+                self.world.bodies[handle].set_linvel(dir * speed, true);
+                // A power-up isn't a collision: don't count it as an impact.
+                self.ents[ent].prev_v = dir * speed;
             }
             PigKind::Boomer => {
-                self.explode(ent);
+                self.explode_at(pos, 3.8, 1.0, Some(ent));
+                self.kill(ent, false);
             }
-            PigKind::Grunt | PigKind::Hog => return,
+            PigKind::Litter => {
+                // The leader shrinks into a piglet; two siblings fan out beside it.
+                let r = PigKind::Piglet.radius();
+                self.world.colliders[self.ents[ent].col].set_shape(SharedShape::ball(r));
+                self.ents[ent].kind = Kind::Pig(PigKind::Piglet);
+                self.ents[ent].shape = Shape::Ball { r };
+                let side = rotate(v.normalize_or(V2::X), std::f32::consts::FRAC_PI_2);
+                for (a, off) in [(0.2_f32, 0.7_f32), (-0.2, -0.7)] {
+                    self.spawn_pig(PigKind::Piglet, pos + side * off, rotate(v, a));
+                }
+            }
+            PigKind::Thumper => {
+                let body = &mut self.world.bodies[handle];
+                let slam = V2::new(v.x * 0.1, -32.0);
+                body.set_linvel(slam, true);
+                body.set_angvel(0.0, true);
+                self.ents[ent].prev_v = slam;
+            }
+            PigKind::Puffer => {
+                self.ents[ent].puff = Some(0.0);
+            }
+            PigKind::Grunt | PigKind::Hog | PigKind::Piglet => {}
         }
+        self.events.push(Event::Power { pos, kind });
         if let Phase::Flying { used, .. } = &mut self.phase {
             *used = true;
         }
     }
 
-    fn explode(&mut self, pig: usize) {
-        let center = self.ents[pig].pos;
-        let radius = 3.8;
+    /// Radial blast: shoves bodies outward and damages them.
+    fn explode_at(&mut self, center: V2, radius: f32, power: f32, skip: Option<usize>) {
         self.events.push(Event::Explosion {
             pos: center,
             radius,
         });
         for i in 0..self.ents.len() {
             let e = &self.ents[i];
-            if !e.alive || i == pig || e.kind == Kind::Rock {
+            if !e.alive || Some(i) == skip || e.kind == Kind::Rock {
                 continue;
             }
             let d = e.pos - center;
@@ -433,17 +634,13 @@ impl Game {
             let falloff = 1.0 - dist / radius;
             let dir = if dist > 0.01 { d / dist } else { V2::Y };
             let body = &mut self.world.bodies[e.handle];
-            let impulse = dir * body.mass() * 22.0 * falloff;
+            let impulse = dir * body.mass() * 22.0 * falloff * power;
             body.apply_impulse(impulse, true);
-            let dmg = 11.0 * falloff;
             let e = &mut self.ents[i];
-            e.hp -= dmg;
-            e.hurt_flash = 1.0;
-        }
-        self.kill(pig, false);
-        self.ents[pig].hp = 0.0;
-        if let Phase::Flying { used, .. } = &mut self.phase {
-            *used = true;
+            if !e.kind.is_pig() {
+                e.hp -= 11.0 * falloff * power;
+                e.hurt_flash = 1.0;
+            }
         }
     }
 
@@ -453,26 +650,40 @@ impl Game {
             return;
         }
         e.alive = false;
-        let points = if award {
-            match e.kind {
-                Kind::Block(m) => m.points(),
-                Kind::Wolf => 5000,
-                _ => 0,
-            }
-        } else {
-            0
+        e.hp = e.hp.min(0.0);
+        let (pos, kind) = (e.pos, e.kind);
+        self.world.remove_body(e.handle);
+        let points = match kind {
+            _ if !award => 0,
+            Kind::Block(m) => m.points(),
+            Kind::Wolf(w) => w.points(),
+            _ => 0,
         };
         self.score += points;
-        let ev = match e.kind {
-            Kind::Pig(_) => Event::Poof { pos: e.pos },
-            kind => Event::Destroyed {
-                pos: e.pos,
-                kind,
-                points,
-            },
-        };
-        self.events.push(ev);
-        self.world.remove_body(e.handle);
+        self.events.push(match kind {
+            Kind::Pig(_) => Event::Poof { pos },
+            kind => Event::Destroyed { pos, kind, points },
+        });
+        if kind == Kind::Block(Material::Tnt) {
+            self.blasts.push(pos);
+        }
+        if award && kind.is_wolf() {
+            self.combo = if self.time - self.last_ko < COMBO_WINDOW {
+                self.combo + 1
+            } else {
+                1
+            };
+            self.last_ko = self.time;
+            if self.combo >= 2 {
+                let bonus = 2500 * (self.combo - 1);
+                self.score += bonus;
+                self.events.push(Event::Combo {
+                    pos,
+                    count: self.combo,
+                    bonus,
+                });
+            }
+        }
     }
 
     /// Advance the simulation by a frame's worth of real time.
@@ -481,6 +692,25 @@ impl Game {
         while self.acc >= DT {
             self.acc -= DT;
             self.fixed_step();
+        }
+    }
+
+    /// Grow inflating Puffers a little each step.
+    fn step_puffers(&mut self) {
+        for e in self.ents.iter_mut().filter(|e| e.alive) {
+            let (Some(p), Kind::Pig(kind)) = (e.puff, e.kind) else {
+                continue;
+            };
+            if p >= 1.0 {
+                continue;
+            }
+            let p = (p + DT / 0.2).min(1.0);
+            e.puff = Some(p);
+            let ease = 1.0 - (1.0 - p) * (1.0 - p);
+            let r = kind.radius() * (1.0 + 1.2 * ease);
+            e.shape = Shape::Ball { r };
+            self.world.colliders[e.col].set_shape(SharedShape::ball(r));
+            self.world.bodies[e.handle].wake_up(true);
         }
     }
 
@@ -493,6 +723,7 @@ impl Game {
             self.advance_phase();
             return;
         }
+        self.step_puffers();
         self.world.step();
 
         let damage_on = self.time > GRACE;
@@ -524,7 +755,7 @@ impl Game {
             e.impact = (e.impact - DT * 2.5).max(0.0);
             e.hurt_flash = (e.hurt_flash - DT * 3.0).max(0.0);
 
-            if matches!(e.kind, Kind::Pig(_)) {
+            if e.kind.is_pig() {
                 if Some(i) == flying && dv > 3.0 {
                     pig_impact = true;
                 }
@@ -546,9 +777,14 @@ impl Game {
                 continue;
             }
             let oob = e.pos.y < -4.0 || e.pos.x < -8.0 || e.pos.x > 60.0;
-            if e.hp <= 0.0 || (oob && !matches!(e.kind, Kind::Pig(_))) {
+            if e.hp <= 0.0 || (oob && !e.kind.is_pig()) {
                 self.kill(i, true);
             }
+        }
+        // TNT goes off after removals; anything it destroys is removed next
+        // step, which lets chain reactions ripple outward.
+        for center in std::mem::take(&mut self.blasts) {
+            self.explode_at(center, 3.4, 1.1, None);
         }
 
         if let Phase::Flying { impact_t, .. } = &mut self.phase
@@ -578,6 +814,16 @@ impl Game {
             })
     }
 
+    /// Ends the current shot: every pig still on the field poofs away.
+    fn end_flight(&mut self) {
+        for i in 0..self.ents.len() {
+            if self.ents[i].alive && self.ents[i].kind.is_pig() {
+                self.kill(i, false);
+            }
+        }
+        self.phase = Phase::Settling { t: 0.0 };
+    }
+
     fn advance_phase(&mut self) {
         match self.phase {
             Phase::Aiming => {}
@@ -591,7 +837,7 @@ impl Game {
                 let t = t + DT;
                 let e = &self.ents[ent];
                 if !e.alive {
-                    self.phase = Phase::Settling { t: 0.0 };
+                    self.end_flight();
                     return;
                 }
                 let speed = self.world.bodies[e.handle].linvel().length();
@@ -601,8 +847,9 @@ impl Game {
                 let is_boomer = e.kind == Kind::Pig(PigKind::Boomer);
 
                 if is_boomer && !used && impact_t.is_some_and(|x| x > 1.2) {
-                    self.explode(ent);
-                    self.phase = Phase::Settling { t: 0.0 };
+                    let pos = e.pos;
+                    self.explode_at(pos, 3.8, 1.0, Some(ent));
+                    self.end_flight();
                     return;
                 }
                 if oob
@@ -611,8 +858,7 @@ impl Game {
                     || impact_t.is_some_and(|x| x > 3.5)
                     || self.wolves_alive() == 0
                 {
-                    self.kill(ent, false);
-                    self.phase = Phase::Settling { t: 0.0 };
+                    self.end_flight();
                 } else {
                     self.phase = Phase::Flying {
                         ent,
@@ -729,7 +975,7 @@ mod tests {
             let mut shots: Vec<Shot> = Vec::new();
             let mut won = false;
             for p in 0..lvl.pigs.len() {
-                let has_power = matches!(lvl.pigs[p], PigKind::Dasher | PigKind::Boomer);
+                let has_power = lvl.pigs[p].has_power();
                 let taps: &[Option<f32>] = if has_power {
                     &[None, Some(0.6), Some(1.0), Some(1.4)]
                 } else {

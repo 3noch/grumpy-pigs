@@ -178,6 +178,9 @@ fn material_colors(m: Material) -> (Color, Color, Color) {
         Material::Straw => (rgb(250, 226, 140), rgb(228, 188, 92), rgb(150, 110, 40)),
         Material::Wood => (rgb(208, 150, 96), rgb(170, 110, 62), rgb(92, 56, 30)),
         Material::Brick => (rgb(206, 108, 86), rgb(168, 74, 58), rgb(92, 40, 32)),
+        Material::Ice => (rgb(232, 248, 255), rgb(168, 214, 240), rgb(84, 140, 182)),
+        Material::Tnt => (rgb(236, 92, 70), rgb(186, 44, 34), rgb(88, 20, 16)),
+        Material::Stone => (rgb(186, 180, 170), rgb(130, 124, 118), rgb(66, 62, 58)),
     }
 }
 
@@ -196,8 +199,9 @@ fn rect_pts(x0: f32, y0: f32, x1: f32, y1: f32) -> [P; 4] {
 
 #[allow(clippy::too_many_lines)]
 pub fn block(view: &View, e: &Ent) {
-    let Shape::Box { hw, hh } = e.shape else {
-        return;
+    let (hw, hh) = match e.shape {
+        Shape::Box { hw, hh } => (hw, hh),
+        Shape::Ball { r } => return boulder(view, e, r),
     };
     if e.kind == Kind::Rock {
         rock(view, e, hw, hh);
@@ -297,6 +301,70 @@ pub fn block(view: &View, e: &Ent) {
                 }
             }
         }
+        Material::Ice => {
+            rig.poly(
+                &rect_pts(-l, -w, l, w),
+                alpha(base, 0.8),
+                Some((line, 0.035)),
+            );
+            rig.rect_grad(-l, -w, l, w, alpha(light, 0.85), alpha(base, 0.6));
+            // Glints
+            for (i, f) in (0u32..).zip([-0.55f32, 0.1, 0.6]) {
+                let x = f * l;
+                let k = 0.5 + hash(seed, i) * 0.5;
+                rig.stroke(
+                    &[(x - w * 0.6 * k, -w * 0.6), (x + w * 0.6 * k, w * 0.6)],
+                    0.05,
+                    rgba(255, 255, 255, 0.7),
+                );
+            }
+            rig.stroke(
+                &[(-l + 0.05, w - 0.05), (l - 0.05, w - 0.05)],
+                0.04,
+                rgba(255, 255, 255, 0.8),
+            );
+        }
+        Material::Tnt | Material::Stone => {
+            rig.poly(&rect_pts(-l, -w, l, w), base, Some((line, 0.04)));
+            rig.rect_grad(-l, -w, l, w, light, base);
+            // Crate slats
+            for x in [-l * 0.5, 0.0, l * 0.5] {
+                rig.stroke(&[(x, -w + 0.06), (x, w - 0.06)], 0.025, alpha(line, 0.4));
+            }
+            let inset = 0.06;
+            let frame = [
+                (-l + inset, -w + inset),
+                (l - inset, -w + inset),
+                (l - inset, w - inset),
+                (-l + inset, w - inset),
+                (-l + inset, -w + inset),
+            ];
+            rig.stroke(&frame, 0.05, line);
+            if mat == Material::Tnt {
+                rig.poly(
+                    &rect_pts(-l, -w * 0.42, l, w * 0.42),
+                    rgb(250, 238, 210),
+                    Some((line, 0.02)),
+                );
+                let c = view.v(e.pos);
+                let size = font_size(w * 1.05 * view.s);
+                let dims = measure_text("TNT", None, size, 1.0);
+                let rot = -e.angle;
+                let (s, co) = rot.sin_cos();
+                let (ox, oy) = (-dims.width / 2.0, dims.offset_y / 2.0);
+                draw_text_ex(
+                    "TNT",
+                    c.x + ox * co - oy * s,
+                    c.y + ox * s + oy * co,
+                    TextParams {
+                        font_size: size,
+                        rotation: rot,
+                        color: line,
+                        ..Default::default()
+                    },
+                );
+            }
+        }
     }
 
     // Cracks as it takes damage.
@@ -319,6 +387,30 @@ pub fn block(view: &View, e: &Ent) {
             rig.stroke(&pts, 0.045, rgba(40, 20, 10, 0.75));
         }
     }
+}
+
+/// A round stone boulder, rolling with its body.
+fn boulder(view: &View, e: &Ent, r: f32) {
+    let rig = Rig::new(*view, e.pos, e.angle, r);
+    let (light, base, line) = material_colors(Material::Stone);
+    let seed = e.seed;
+    let lumpy = move |th: f32| {
+        1.0 + 0.05 * (th * 5.0 + hash(seed, 1) * 6.0).sin() + 0.03 * (th * 9.0).sin()
+    };
+    rig.radial((0.0, 0.0), lumpy, 0.06, line, line, (0.0, 0.0));
+    rig.radial((0.0, 0.0), lumpy, 0.0, light, base, (-0.3, 0.35));
+    for i in 0..7 {
+        let a = hash(seed, i + 10) * std::f32::consts::TAU;
+        let d = 0.25 + hash(seed, i + 20) * 0.55;
+        let rr = 0.05 + hash(seed, i + 30) * 0.08;
+        rig.circle(a.cos() * d, a.sin() * d, rr, alpha(line, 0.35));
+    }
+    rig.stroke(
+        &bez((-0.5, -0.2), (-0.1, 0.0), (0.2, -0.45), 6),
+        0.04,
+        alpha(line, 0.5),
+    );
+    rig.ellipse(-0.35, 0.45, 0.22, 0.1, 0.6, rgba(255, 255, 255, 0.3));
 }
 
 fn rock(view: &View, e: &Ent, hw: f32, hh: f32) {

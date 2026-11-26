@@ -9,12 +9,26 @@ procedurally, so there are no asset files.
 
 ## Pigs
 
-| Pig    | Power                                   |
-|--------|-----------------------------------------|
-| Grunt  | Plain fury                               |
-| Dasher | Tap mid-air to rocket forward            |
-| Boomer | Tap to explode (auto-detonates after impact) |
-| Hog    | Big and heavy, made for brick             |
+| Pig     | Power (tap mid-air)                                   |
+|---------|-------------------------------------------------------|
+| Grunt   | Plain fury                                            |
+| Dasher  | Rockets forward                                       |
+| Boomer  | Explodes (auto-detonates after impact)                |
+| Hog     | None: big and heavy, made for brick                   |
+| Litter  | Splits into three piglets                             |
+| Thumper | Stops dead and slams straight down                    |
+| Puffer  | Inflates to twice its size, shoving structures apart  |
+
+## Bad guys and tricks
+
+- **Wolves**: Pups (fragile), Wolves, Helmet wolves (a cooking pot doubles their toughness)
+  and the Big Bad Boss.
+- **Materials**: straw, wood, brick, slippery and brittle **ice**, and **TNT** crates that
+  explode when destroyed and can set each other off.
+- **Boulders and ramps**: knock a boulder loose and let it roll downhill into a fort.
+- **Combos**: knock out several wolves within 1.5 s of each other for a DOUBLE / TRIPLE / MEGA KO bonus.
+
+12 levels, from "Straw Hut" to "Big Bad Boss".
 
 Controls: press anywhere, pull back, release. Mouse and touch both work.
 
@@ -74,11 +88,12 @@ Not yet built or tested on devices. These are the standard macroquad routes:
 ## Layout
 
 - `src/sim.rs`: physics world, damage model (impact Δv), pig powers, turn flow. No rendering, so it's unit-testable.
-- `src/levels.rs`: level builder helpers (`frame`, `post`, `plank`, `hill`, ...) and the 5 levels.
+- `src/levels.rs`: level builder helpers (`frame`, `post`, `plank`, `hill`, `ramp`, `tnt`, `boulder`, ...) and the 12 levels.
 - `src/gfx.rs`: vector toolkit: a posable "rig" (rotation + squash/stretch) and shaded, outlined mesh primitives.
 - `src/art.rs`: the animated characters. Pigs and wolves have moods (idle, aim, yell, dizzy, cheer / smug, worried, hurt, laugh), blinking, gaze tracking and squash-and-stretch.
 - `src/render.rs`: scenery, material-shaded blocks, sling, HUD helpers.
 - `src/main.rs`: menu, input, HUD, particles, end screens.
+- `src/platform.rs` + `web/platform.js`: fullscreen and install-as-app glue.
 
 Lints: `clippy::pedantic` is on (see `[lints.clippy]` in `Cargo.toml`); `cargo clippy --all-targets` should stay at zero warnings.
 

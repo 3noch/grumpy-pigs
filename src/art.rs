@@ -10,7 +10,7 @@ use macroquad::prelude::*;
 
 use crate::gfx::{P, Rig, alpha, bez, blink, hash, mix, rgb, rgba};
 use crate::render::View;
-use crate::sim::{PigKind, V2};
+use crate::sim::{PigKind, V2, WolfKind};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mood {
@@ -44,6 +44,8 @@ pub struct Anim {
     pub stretch_dir: V2,
     /// 0..1 red-hot glow (Boomer about to blow).
     pub glow: f32,
+    /// Size multiplier on top of the kind's radius (Puffer inflation).
+    pub scale: f32,
 }
 
 impl Anim {
@@ -56,6 +58,7 @@ impl Anim {
             stretch: 0.0,
             stretch_dir: V2::Y,
             glow: 0.0,
+            scale: 1.0,
         }
     }
 }
@@ -110,6 +113,24 @@ fn pig_palette(kind: PigKind) -> PigPalette {
             dark: rgb(118, 70, 44),
             line: rgb(56, 30, 18),
         },
+        PigKind::Litter | PigKind::Piglet => PigPalette {
+            light: rgb(255, 240, 222),
+            base: rgb(244, 206, 172),
+            dark: rgb(214, 160, 122),
+            line: rgb(102, 58, 36),
+        },
+        PigKind::Thumper => PigPalette {
+            light: rgb(228, 196, 206),
+            base: rgb(178, 128, 150),
+            dark: rgb(138, 92, 114),
+            line: rgb(58, 28, 44),
+        },
+        PigKind::Puffer => PigPalette {
+            light: rgb(214, 252, 228),
+            base: rgb(124, 208, 168),
+            dark: rgb(80, 162, 122),
+            line: rgb(26, 78, 58),
+        },
     }
 }
 
@@ -149,7 +170,7 @@ pub fn pig(view: &View, kind: PigKind, pos: V2, angle: f32, a: &Anim) {
     } else {
         0.0
     };
-    let rig = rig_for(view, pos, angle, kind.radius(), a, cheer_hop);
+    let rig = rig_for(view, pos, angle, kind.radius() * a.scale, a, cheer_hop);
     let mut pal = pig_palette(kind);
     if a.glow > 0.0 {
         let pulse = 0.5 + 0.5 * (t * 25.0).sin();
@@ -172,6 +193,24 @@ pub fn pig(view: &View, kind: PigKind, pos: V2, angle: f32, a: &Anim) {
             let pts = bez(knot, mid, end, 8);
             rig.stroke(&pts, 0.17, pal.line);
             rig.stroke(&pts, 0.11, rgb(222, 44, 50));
+        }
+    }
+
+    if kind == PigKind::Puffer {
+        // Spines that bristle out as it inflates.
+        let puffed = ((a.scale - 1.0) / 1.2).clamp(0.0, 1.0);
+        let len = 0.12 + 0.22 * puffed;
+        for i in 0..16 {
+            let th = i as f32 / 16.0 * TAU + 0.1;
+            let (c, s) = (th.cos(), th.sin());
+            let (tc, ts) = ((th + 0.12).cos(), (th + 0.12).sin());
+            let (bc, bs) = ((th - 0.12).cos(), (th - 0.12).sin());
+            let tip = (c * (1.0 + len), s * (1.0 + len));
+            rig.poly(
+                &[(bc * 0.95, bs * 0.95), tip, (tc * 0.95, ts * 0.95)],
+                pal.dark,
+                Some((pal.line, 0.03)),
+            );
         }
     }
 
@@ -211,9 +250,31 @@ pub fn pig(view: &View, kind: PigKind, pos: V2, angle: f32, a: &Anim) {
     rig.ellipse(0.0, -0.78, 0.62, 0.16, 0.0, alpha(pal.dark, 0.45));
     rig.ellipse(-0.45, 0.5, 0.2, 0.11, 0.7, rgba(255, 255, 255, 0.45));
 
-    // Cheeks
+    // Cheeks (the Puffer's swell up as it inflates)
+    let cheek = if kind == PigKind::Puffer {
+        0.17 * a.scale.min(1.6)
+    } else {
+        0.17
+    };
     for sx in [-1.0, 1.0] {
-        rig.ellipse(sx * 0.62, -0.18, 0.17, 0.1, 0.0, rgba(255, 80, 110, 0.3));
+        rig.ellipse(
+            sx * 0.62,
+            -0.18,
+            cheek,
+            cheek * 0.6,
+            0.0,
+            rgba(255, 80, 110, 0.3),
+        );
+    }
+    if matches!(kind, PigKind::Litter | PigKind::Piglet) {
+        // Brown patches
+        for (x, y, rx, ry) in [
+            (0.55, 0.45, 0.22, 0.17),
+            (-0.62, 0.05, 0.14, 0.2),
+            (0.2, -0.75, 0.18, 0.1),
+        ] {
+            rig.ellipse(x, y, rx, ry, 0.4, alpha(rgb(150, 92, 58), 0.55));
+        }
     }
 
     // --- Eyes ---
@@ -426,6 +487,42 @@ pub fn pig(view: &View, kind: PigKind, pos: V2, angle: f32, a: &Anim) {
                 rig.poly(&pts, rgb(252, 246, 226), Some((pal.line, 0.035)));
             }
         }
+        PigKind::Litter => {
+            // Three-tuft topknot, one per piglet inside.
+            for (i, x) in [-0.18f32, 0.0, 0.18].into_iter().enumerate() {
+                let sway = (t * 4.0 + i as f32).sin() * 0.04;
+                let pts = bez((x, 0.95), (x + 0.1 + sway, 1.15), (x + sway, 1.3), 6);
+                rig.stroke(&pts, 0.1, pal.line);
+                rig.stroke(&pts, 0.05, pal.dark);
+            }
+        }
+        PigKind::Piglet => {
+            // A tiny curl, like a smaller Grunt.
+            let curl = bez((0.0, 0.98), (0.2, 1.15), (0.05, 1.22), 6);
+            rig.stroke(&curl, 0.12, pal.line);
+            rig.stroke(&curl, 0.06, pal.base);
+        }
+        PigKind::Thumper => {
+            // Mohawk
+            for i in 0..5 {
+                let x = -0.32 + i as f32 * 0.16;
+                let h = 0.32 - (x.abs() * 0.4);
+                rig.poly(
+                    &[(x - 0.09, 0.9), (x + 0.02, 0.92 + h), (x + 0.09, 0.9)],
+                    rgb(40, 30, 36),
+                    Some((pal.line, 0.02)),
+                );
+            }
+            // Wrestler's mask stripes across the eyes
+            for sx in [-1.0, 1.0] {
+                rig.stroke(
+                    &[(sx * 0.95, 0.3), (sx * 0.58, 0.25)],
+                    0.09,
+                    alpha(pal.line, 0.8),
+                );
+            }
+        }
+        PigKind::Puffer => {}
     }
 }
 
@@ -436,23 +533,83 @@ struct WolfPalette {
     line: Color,
     cream: Color,
     cream_dark: Color,
+    iris: (Color, Color),
 }
 
-fn wolf_palette(hurt: f32) -> WolfPalette {
+fn wolf_palette(kind: WolfKind, hurt: f32) -> WolfPalette {
     let red = rgb(240, 110, 110);
+    let (light, base, dark, iris) = match kind {
+        WolfKind::Pup => (
+            rgb(232, 220, 208),
+            rgb(170, 150, 136),
+            rgb(124, 106, 94),
+            (rgb(200, 240, 255), rgb(90, 170, 230)),
+        ),
+        WolfKind::Boss => (
+            rgb(150, 150, 172),
+            rgb(74, 76, 96),
+            rgb(48, 50, 64),
+            (rgb(255, 210, 150), rgb(240, 90, 40)),
+        ),
+        WolfKind::Wolf | WolfKind::Helmet => (
+            rgb(206, 210, 224),
+            rgb(128, 134, 158),
+            rgb(88, 92, 114),
+            (rgb(255, 245, 190), rgb(250, 205, 70)),
+        ),
+    };
     WolfPalette {
-        light: mix(rgb(206, 210, 224), red, hurt * 0.4),
-        base: mix(rgb(128, 134, 158), red, hurt * 0.5),
-        dark: rgb(88, 92, 114),
+        light: mix(light, red, hurt * 0.4),
+        base: mix(base, red, hurt * 0.5),
+        dark,
         line: rgb(38, 40, 56),
         cream: rgb(244, 236, 220),
         cream_dark: rgb(208, 196, 176),
+        iris,
+    }
+}
+
+/// The Helmet wolf's cooking pot, until it's knocked about.
+fn pot(rig: &Rig, line: Color) {
+    let metal_light = rgb(214, 218, 226);
+    let metal = rgb(140, 146, 160);
+    let dome: Vec<P> = (0..=16)
+        .map(|i| {
+            let th = i as f32 / 16.0 * PI;
+            (th.cos() * 0.98, 0.62 + th.sin() * 0.72)
+        })
+        .collect();
+    rig.poly(&dome, metal, Some((line, 0.06)));
+    rig.ellipse(-0.3, 1.05, 0.28, 0.14, 0.4, alpha(metal_light, 0.8));
+    // Rim and handle
+    rig.poly(
+        &[(-1.12, 0.56), (1.12, 0.56), (1.12, 0.7), (-1.12, 0.7)],
+        metal,
+        Some((line, 0.04)),
+    );
+    rig.poly(
+        &[(0.95, 0.9), (1.45, 0.98), (1.45, 1.08), (0.95, 1.06)],
+        rgb(60, 50, 50),
+        Some((line, 0.03)),
+    );
+    for x in [-0.6, 0.0, 0.6] {
+        rig.circle(x, 0.63, 0.04, line);
     }
 }
 
 /// A smug wolf. `hp` is 0..1, `hurt` is the recent-hit flash.
 #[allow(clippy::too_many_lines)]
-pub fn wolf(view: &View, pos: V2, angle: f32, radius: f32, hp: f32, hurt: f32, a: &Anim) {
+#[allow(clippy::too_many_arguments)]
+pub fn wolf(
+    view: &View,
+    kind: WolfKind,
+    pos: V2,
+    angle: f32,
+    radius: f32,
+    hp: f32,
+    hurt: f32,
+    a: &Anim,
+) {
     let t = a.t;
     let bounce = match a.mood {
         Mood::Laugh => 0.07 * (t * 22.0).sin(),
@@ -465,7 +622,7 @@ pub fn wolf(view: &View, pos: V2, angle: f32, radius: f32, hp: f32, hurt: f32, a
         0.0
     };
     let rig = rig_for(view, pos + V2::new(shake, 0.0), angle, radius, a, bounce);
-    let pal = wolf_palette(hurt);
+    let pal = wolf_palette(kind, hurt);
     let ow = 0.07;
     let look = gaze(&rig, a.look, 0.06);
 
@@ -486,7 +643,8 @@ pub fn wolf(view: &View, pos: V2, angle: f32, radius: f32, hp: f32, hurt: f32, a
         let tw = if sx > 0.0 { twitch } else { 0.0 };
         let ang = PI / 2.0 - sx * (0.32 + droop) + tw;
         let base = (sx * 0.52, 0.62);
-        let pts = ear(base, ang, 0.85, 0.26);
+        let ear_len = if kind == WolfKind::Pup { 0.6 } else { 0.85 };
+        let pts = ear(base, ang, ear_len, 0.26);
         rig.poly(&pts, pal.base, Some((pal.line, ow)));
         let inner = shrink(
             &pts,
@@ -558,16 +716,7 @@ pub fn wolf(view: &View, pos: V2, angle: f32, radius: f32, hp: f32, hurt: f32, a
         let worried = a.mood == Mood::Worried;
         let ry = if worried { 0.24 } else { 0.2 };
         rig.ellipse(ex, ey, 0.19 + ow * 0.7, ry + ow * 0.7, 0.0, pal.line);
-        rig.blob(
-            ex,
-            ey,
-            0.19,
-            ry,
-            0.0,
-            rgb(255, 245, 190),
-            rgb(250, 205, 70),
-            None,
-        );
+        rig.blob(ex, ey, 0.19, ry, 0.0, pal.iris.0, pal.iris.1, None);
         let (pw, ph) = if worried {
             (0.045, 0.07)
         } else {
@@ -738,5 +887,29 @@ pub fn wolf(view: &View, pos: V2, angle: f32, radius: f32, hp: f32, hurt: f32, a
                 Some((rgb(170, 150, 120), 0.02)),
             );
         }
+    }
+
+    match kind {
+        WolfKind::Helmet if hp > 0.5 => pot(&rig, pal.line),
+        WolfKind::Boss => {
+            // A scar over one eye and a gold earring.
+            let scar = [(0.16, 0.6), (0.36, 0.25), (0.56, -0.08)];
+            rig.stroke(&scar, 0.07, rgb(214, 120, 132));
+            for (x, y) in [(0.22, 0.48), (0.34, 0.3), (0.47, 0.1)] {
+                rig.stroke(
+                    &[(x - 0.07, y - 0.04), (x + 0.07, y + 0.04)],
+                    0.035,
+                    rgb(214, 120, 132),
+                );
+            }
+            let earring: Vec<P> = (0..=16)
+                .map(|i| {
+                    let th = i as f32 / 16.0 * TAU;
+                    (-0.86 + th.cos() * 0.1, 0.72 + th.sin() * 0.1)
+                })
+                .collect();
+            rig.stroke(&earring, 0.05, rgb(240, 196, 60));
+        }
+        _ => {}
     }
 }
