@@ -28,8 +28,18 @@ pub enum Install {
 pub enum Hotspot {
     Fullscreen = 1,
     Install = 2,
-    /// Opens the share sheet (or copies) with the text set by [`share_button`].
+    /// Opens the share sheet (or copies) with the text set by [`share_hotspot`].
     Share = 3,
+    /// Asks the player to type something (see [`prompt_hotspot`]).
+    Prompt = 4,
+}
+
+/// Things the game asks the player to type.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Ask {
+    LevelName = 1,
+    AuthorName = 2,
+    PasteLink = 3,
 }
 
 /// What happened after a Share tap.
@@ -62,6 +72,35 @@ mod imp {
         fn gp_link_clear();
         fn gp_share_set(text: *const u8, len: usize);
         fn gp_share_result() -> i32;
+        fn gp_prompt_arm(
+            id: i32,
+            title: *const u8,
+            title_len: usize,
+            def: *const u8,
+            def_len: usize,
+        );
+        fn gp_prompt_len(id: i32) -> i32;
+        fn gp_prompt_read(id: i32, dst: *mut u8);
+    }
+
+    pub fn prompt_arm(id: i32, title: &str, default: &str) {
+        // SAFETY: both buffers are only read during the call.
+        unsafe {
+            gp_prompt_arm(
+                id,
+                title.as_ptr(),
+                title.len(),
+                default.as_ptr(),
+                default.len(),
+            );
+        }
+    }
+    /// The text typed for prompt `id`, once.
+    pub fn prompt_take(id: i32) -> Option<String> {
+        // SAFETY: JS writes exactly the reported number of bytes into `p`.
+        read_str(unsafe { gp_prompt_len(id) }, |p| unsafe {
+            gp_prompt_read(id, p);
+        })
     }
 
     /// Reads a string JS reports as `len` bytes, via a copy into our memory.
@@ -214,6 +253,15 @@ mod imp {
     pub fn share_result() -> i32 {
         SHARE_RESULT.swap(0, Ordering::Relaxed)
     }
+    /// Desktop builds type into the game itself (see `App::typing`).
+    pub fn prompt_arm(_id: i32, _title: &str, _default: &str) {}
+    pub fn prompt_take(_id: i32) -> Option<String> {
+        None
+    }
+    pub fn clipboard() -> Option<String> {
+        macroquad::miniquad::window::clipboard_get()
+    }
+
     pub fn share_now() {
         let s = SHARE
             .lock()
@@ -262,12 +310,15 @@ pub fn set_pref(which: Pref, on: bool) {
 }
 
 /// Call once at the start of every frame, before registering hotspots.
-pub fn begin_frame() {
+/// `typing` is true while the game's own text box has the keyboard.
+pub fn begin_frame(typing: bool) {
     imp::hotspots_clear();
     #[cfg(not(target_arch = "wasm32"))]
-    if is_key_pressed(KeyCode::F) {
+    if !typing && is_key_pressed(KeyCode::F) {
         imp::toggle_fullscreen();
     }
+    #[cfg(target_arch = "wasm32")]
+    let _ = typing;
 }
 
 /// Registers a tappable area for this frame. macroquad's screen units are
@@ -282,7 +333,7 @@ pub fn activate(which: Hotspot) {
     match which {
         Hotspot::Fullscreen => imp::toggle_fullscreen(),
         Hotspot::Share => imp::share_now(),
-        Hotspot::Install => {}
+        Hotspot::Install | Hotspot::Prompt => {}
     }
     #[cfg(target_arch = "wasm32")]
     let _ = which;
@@ -323,4 +374,25 @@ pub fn share_result() -> Option<ShareResult> {
         3 => Some(ShareResult::Failed),
         _ => None,
     }
+}
+
+/// Registers a tappable area that asks the player to type something. On the
+/// web the browser's text prompt opens (so phones show their keyboard);
+/// desktop builds handle the tap in the game instead. Read the answer with
+/// [`take_answer`].
+pub fn prompt_hotspot(rect: Rect, ask: Ask, title: &str, default: &str) {
+    imp::prompt_arm(ask as i32, title, default);
+    hotspot(Hotspot::Prompt, rect);
+}
+
+/// What the player typed for `ask` on the web, once (`None` if nothing yet
+/// or they cancelled).
+pub fn take_answer(ask: Ask) -> Option<String> {
+    imp::prompt_take(ask as i32)
+}
+
+/// The desktop clipboard (web builds paste through a prompt instead).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn clipboard() -> Option<String> {
+    imp::clipboard()
 }

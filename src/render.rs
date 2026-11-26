@@ -22,21 +22,25 @@ pub struct View {
 
 pub const VIEW_W: f32 = 42.0;
 pub const VIEW_H: f32 = 22.0;
-const VIEW_X0: f32 = -1.0;
-const VIEW_Y0: f32 = -1.5;
+pub const VIEW_X0: f32 = -1.0;
+pub const VIEW_Y0: f32 = -1.5;
 
 impl View {
     pub fn fit(shake: Vec2, mirrored: bool) -> Self {
-        let (sw, sh) = (screen_width(), screen_height());
-        let s = (sw / VIEW_W).min(sh / VIEW_H);
-        let ox = (sw - VIEW_W * s) / 2.0 - VIEW_X0 * s + shake.x;
-        // Anchor the bottom of the view to the bottom of the screen.
-        let oy = sh + VIEW_Y0 * s + shake.y;
+        let area = Rect::new(shake.x, shake.y, screen_width(), screen_height());
+        Self::fit_in(area, mirrored)
+    }
+
+    /// Fits the play area inside `area`, anchored to its bottom edge.
+    pub fn fit_in(area: Rect, mirrored: bool) -> Self {
+        let s = (area.w / VIEW_W).min(area.h / VIEW_H);
+        let ox = area.x + (area.w - VIEW_W * s) / 2.0 - VIEW_X0 * s;
+        let oy = area.bottom() + VIEW_Y0 * s;
         View {
             s,
             ox,
             oy,
-            mirror: mirrored.then_some(sw),
+            mirror: mirrored.then_some(screen_width()),
         }
     }
     pub fn p(&self, x: f32, y: f32) -> Vec2 {
@@ -50,6 +54,11 @@ impl View {
     }
     pub fn v(&self, v: V2) -> Vec2 {
         self.p(v.x, v.y)
+    }
+    /// Screen point → world point (the inverse of [`View::p`]).
+    pub fn unproject(&self, p: Vec2) -> V2 {
+        let sx = self.mirror.map_or(p.x, |w| w - p.x);
+        V2::new((sx - self.ox) / self.s, (self.oy - p.y) / self.s)
     }
     /// Leftmost / rightmost visible world x.
     pub fn x_range(&self) -> (f32, f32) {

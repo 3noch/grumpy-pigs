@@ -99,6 +99,7 @@ impl B {
         Level {
             name: name.to_owned(),
             author: "Grumpy Pigs".to_owned(),
+            based_on: String::new(),
             theme: Theme::Meadow,
             launcher: Launcher::default(),
             pieces: self.pieces,

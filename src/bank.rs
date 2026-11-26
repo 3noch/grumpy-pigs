@@ -92,6 +92,27 @@ impl Bank {
         true
     }
 
+    /// Saves `level` over the entry with `old_code` on my shelf (keeping its
+    /// place in the list), or adds it if that entry is gone. Returns the new code.
+    pub fn replace(&mut self, old_code: &str, level: &Level) -> String {
+        let code = share::encode(level);
+        match self
+            .entries
+            .iter_mut()
+            .find(|e| e.code == old_code && e.place == Shelf::Mine)
+        {
+            Some(e) => {
+                e.code.clone_from(&code);
+                e.level = Ok(level.clone());
+                self.save();
+            }
+            None => {
+                self.add(level, Shelf::Mine);
+            }
+        }
+        code
+    }
+
     pub fn remove(&mut self, code: &str, place: Shelf) {
         self.entries
             .retain(|e| !(e.code == code && e.place == place));

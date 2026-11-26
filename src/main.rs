@@ -2,6 +2,7 @@
 
 mod art;
 mod bank;
+mod editor;
 mod gfx;
 mod levels;
 mod menu;
@@ -53,10 +54,13 @@ enum Source {
     Builtin(usize),
     /// From the bank or a shared link.
     Custom,
+    /// Test-playing the level in the editor.
+    Editor,
 }
 
 enum Screen {
     Menu,
+    Edit,
     Play {
         src: Source,
         level: Box<Level>,
@@ -87,6 +91,21 @@ struct App {
     /// Best stars for bank/link levels, by level code.
     custom_stars: std::collections::HashMap<String, u8>,
     toast: Option<(String, f32)>,
+    editor: Option<Box<editor::Editor>>,
+    /// The player's name, put on levels they make.
+    me: String,
+    /// Desktop builds' text box (the web uses the browser's prompt).
+    typing: Option<Typing>,
+    answers: std::collections::HashMap<platform::Ask, String>,
+    /// Dev aid: input to use instead of the real pointer for one frame.
+    scripted: Option<Input>,
+}
+
+/// A text box open on desktop builds.
+struct Typing {
+    ask: platform::Ask,
+    title: String,
+    text: String,
 }
 
 #[derive(Default)]
@@ -94,6 +113,8 @@ struct Input {
     pressed: Option<Vec2>,
     down: Option<Vec2>,
     released: bool,
+    /// Where the pointer is (or was last), pressed or not.
+    pos: Vec2,
 }
 
 impl Input {
@@ -103,6 +124,7 @@ impl Input {
             pressed: is_mouse_button_pressed(MouseButton::Left).then_some(pos),
             down: is_mouse_button_down(MouseButton::Left).then_some(pos),
             released: is_mouse_button_released(MouseButton::Left),
+            pos,
         }
     }
 }
@@ -154,6 +176,7 @@ enum Icon {
     Mirror,
     Share,
     Trash,
+    Pencil,
 }
 
 /// Draws a rounded button with a line icon; true if tapped this frame.
@@ -224,6 +247,17 @@ fn icon_button(rect: Rect, icon: Icon, input: &Input, accent: Color) -> bool {
                 c + vec2(k * 0.45, -k * 0.6),
                 WHITE,
             );
+        }
+        Icon::Pencil => {
+            // A pencil, tip at bottom-left.
+            let d = vec2(0.7, -0.7);
+            let n = vec2(0.7, 0.7) * (k * 0.32);
+            let tip = c + vec2(-k * 0.95, k * 0.95);
+            let base = tip + d * k * 0.55;
+            let end = tip + d * k * 2.5;
+            draw_triangle(tip, base + n, base - n, WHITE);
+            draw_triangle(base + n, base - n, end - n, WHITE);
+            draw_triangle(base + n, end + n, end - n, WHITE);
         }
         Icon::Trash => {
             line(c + vec2(-k * 0.9, -k * 0.6), c + vec2(k * 0.9, -k * 0.6));
@@ -332,7 +366,104 @@ impl App {
             confirm_delete: None,
             custom_stars: std::collections::HashMap::new(),
             toast: None,
+            editor: None,
+            me: platform::load("author")
+                .unwrap_or_default()
+                .trim()
+                .to_owned(),
+            typing: None,
+            answers: std::collections::HashMap::new(),
+            scripted: None,
         }
+    }
+
+    fn set_me(&mut self, name: &str) {
+        name.trim().clone_into(&mut self.me);
+        platform::save("author", &self.me);
+    }
+
+    /// What the player typed for `ask`, once (web prompt or desktop text box).
+    fn answer(&mut self, ask: platform::Ask) -> Option<String> {
+        platform::take_answer(ask).or_else(|| self.answers.remove(&ask))
+    }
+
+    /// On desktop, opens the game's own text box (the web prompt opens by itself).
+    fn ask_natively(&mut self, ask: platform::Ask, title: &str, default: &str) {
+        if cfg!(target_arch = "wasm32") {
+            return;
+        }
+        while get_char_pressed().is_some() {}
+        self.typing = Some(Typing {
+            ask,
+            title: title.to_owned(),
+            text: default.to_owned(),
+        });
+    }
+
+    /// Opens the editor on `level`: my saved level if it's on my shelf,
+    /// otherwise a remix.
+    fn edit_level(&mut self, level: Level) {
+        let code = share::encode(&level);
+        let mine = self
+            .bank
+            .on_shelf(bank::Shelf::Mine)
+            .any(|e| e.code == code);
+        let ed = editor::Editor::open(level, mine.then_some(code), &self.me);
+        self.open_editor(ed);
+    }
+
+    /// The desktop text box, drawn over everything. Returns true while open.
+    fn typing_box(&mut self, input: &Input) -> bool {
+        let Some(t) = &mut self.typing else {
+            return false;
+        };
+        while let Some(c) = get_char_pressed() {
+            if !c.is_control() {
+                t.text.push(c);
+            }
+        }
+        if is_key_pressed(KeyCode::Backspace) {
+            t.text.pop();
+        }
+        let (sw, sh) = (screen_width(), screen_height());
+        let u = ui_unit();
+        draw_rectangle(0.0, 0.0, sw, sh, Color::new(0.0, 0.0, 0.0, 0.55));
+        let (w, h) = (u * 1.0, u * 0.42);
+        let r = Rect::new((sw - w) / 2.0, (sh - h) / 2.0, w, h);
+        draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.98, 0.94, 0.86, 1.0));
+        render::text_centered(
+            &t.title,
+            sw / 2.0,
+            r.y + h * 0.22,
+            u * 0.045,
+            rgb(70, 45, 30),
+        );
+        let field = Rect::new(r.x + u * 0.05, r.y + h * 0.33, w - u * 0.1, u * 0.08);
+        draw_rectangle(field.x, field.y, field.w, field.h, WHITE);
+        let caret = if (self.time * 2.0).fract() < 0.5 {
+            "|"
+        } else {
+            ""
+        };
+        draw_text(
+            format!("{}{caret}", t.text),
+            field.x + u * 0.015,
+            field.y + field.h * 0.7,
+            u * 0.045,
+            BLACK,
+        );
+        let (bw, bh) = (u * 0.22, u * 0.08);
+        let ok = Rect::new(sw / 2.0 + u * 0.02, r.bottom() - bh * 1.4, bw, bh);
+        let cancel = Rect::new(sw / 2.0 - u * 0.02 - bw, ok.y, bw, bh);
+        let done = button(ok, "OK", input, GREEN) || is_key_pressed(KeyCode::Enter);
+        let cancelled = button(cancel, "Cancel", input, SLATE) || is_key_pressed(KeyCode::Escape);
+        if done {
+            let t = self.typing.take().expect("typing box is open");
+            self.answers.insert(t.ask, t.text);
+        } else if cancelled {
+            self.typing = None;
+        }
+        true
     }
 
     fn toast(&mut self, text: &str) {
@@ -368,8 +499,15 @@ impl App {
     fn frame(&mut self) {
         let dt = get_frame_time().min(0.05);
         self.time += dt;
-        platform::begin_frame();
-        let input = Input::read();
+        platform::begin_frame(self.typing.is_some());
+        let input = self.scripted.take().unwrap_or_else(Input::read);
+        if let Some(text) = self.answer(platform::Ask::PasteLink) {
+            self.incoming = Some(menu::Incoming {
+                level: share::decode(&text),
+                saved: false,
+            });
+            self.screen = Screen::Menu;
+        }
         if let Some(link) = platform::take_link() {
             self.incoming = Some(menu::Incoming {
                 level: share::decode(&link),
@@ -392,12 +530,24 @@ impl App {
             Vec2::ZERO
         };
         self.shake = (self.shake - dt * 3.0).max(0.0);
-        let view = View::fit(shake, self.mirrored);
+        let view = if let (Screen::Edit, Some(ed)) = (&self.screen, &self.editor) {
+            ed.view(self.mirrored)
+        } else {
+            View::fit(shake, self.mirrored)
+        };
         render::background(&view, self.time);
 
+        // The desktop text box takes the input while it's open.
+        let blocked = Input::default();
+        let typing = self.typing.is_some();
+        let screen_input = if typing { &blocked } else { &input };
         match &self.screen {
-            Screen::Menu => self.menu(&input),
-            Screen::Play { .. } => self.play(&input, &view, dt),
+            Screen::Menu => self.menu(screen_input),
+            Screen::Edit => self.edit(screen_input, &view),
+            Screen::Play { .. } => self.play(screen_input, &view, dt),
+        }
+        if typing {
+            self.typing_box(&input);
         }
         self.draw_toast(dt);
     }
@@ -457,7 +607,9 @@ impl App {
         self.screen = Screen::Play { src, level, game };
         match nav {
             Nav::Stay => {}
+            Nav::Menu | Nav::Edit if src == Source::Editor => self.screen = Screen::Edit,
             Nav::Menu => self.screen = Screen::Menu,
+            Nav::Edit => self.edit_level(level_copy),
             Nav::Restart => self.begin(src, level_copy),
             Nav::Next => {
                 if let Source::Builtin(i) = src {
@@ -768,6 +920,7 @@ impl App {
             Source::Builtin(i) => format!("{}. {}", i + 1, level.name),
             Source::Custom if level.author.is_empty() => level.name.clone(),
             Source::Custom => format!("{}  -  by {}", level.name, level.author),
+            Source::Editor => format!("Testing: {}", level.name),
         };
         render::text_centered(&title, sw / 2.0, u * 0.08, u * 0.05, WHITE);
 
@@ -809,6 +962,8 @@ impl App {
         }
         if icon_button(hud.menu, Icon::Menu, input, SLATE) {
             Nav::Menu
+        } else if icon_button(hud.edit, Icon::Pencil, input, SLATE) {
+            Nav::Edit
         } else if icon_button(hud.retry, Icon::Restart, input, SLATE) {
             Nav::Restart
         } else if mirror_button(hud.mirror, input, self.mirrored) {
@@ -857,6 +1012,7 @@ impl App {
                     let best = self.custom_stars.entry(share::encode(level)).or_insert(0);
                     *best = (*best).max(st);
                 }
+                Source::Editor => {}
             }
             for s in 0..3u8 {
                 let fs = f32::from(s);
@@ -882,7 +1038,12 @@ impl App {
         let total = count * bw + (count - 1.0) * gap;
         let x0 = (sw - total) * 0.5;
         let slot = |i: f32| Rect::new(x0 + i * (bw + gap), by, bw, bh);
-        if button(slot(0.0), "Menu", input, SLATE) {
+        let back = if src == Source::Editor {
+            "Edit"
+        } else {
+            "Menu"
+        };
+        if button(slot(0.0), back, input, SLATE) {
             Nav::Menu
         } else if button(slot(1.0), "Retry", input, ORANGE) {
             Nav::Restart
@@ -904,6 +1065,7 @@ enum Nav {
     Next,
     Mirror,
     Save,
+    Edit,
 }
 
 /// The always-visible buttons along the top-left: menu, retry, mirror and
@@ -911,6 +1073,7 @@ enum Nav {
 struct HudButtons {
     menu: Rect,
     retry: Rect,
+    edit: Rect,
     share: Rect,
     mirror: Rect,
     full: Option<Rect>,
@@ -919,20 +1082,22 @@ struct HudButtons {
 impl HudButtons {
     fn new() -> Self {
         let u = ui_unit();
-        let bs = u * 0.09;
+        let bs = u * 0.08;
         let slot = |i: f32| Rect::new(u * 0.03 + bs * 1.2 * i, u * 0.03, bs, bs);
         HudButtons {
             menu: slot(0.0),
             retry: slot(1.0),
-            share: slot(2.0),
-            mirror: slot(3.0),
-            full: (platform::fullscreen() != platform::Fullscreen::Unavailable).then(|| slot(4.0)),
+            edit: slot(2.0),
+            share: slot(3.0),
+            mirror: slot(4.0),
+            full: (platform::fullscreen() != platform::Fullscreen::Unavailable).then(|| slot(5.0)),
         }
     }
     fn contains(&self, p: Vec2) -> bool {
         [
             Some(self.menu),
             Some(self.retry),
+            Some(self.edit),
             Some(self.share),
             Some(self.mirror),
             self.full,
@@ -1000,35 +1165,25 @@ async fn render_icon(path: &str, scale: f32) {
     }
 }
 
-#[macroquad::main(conf)]
-async fn main() {
-    if !cfg!(target_arch = "wasm32")
-        && let Ok(path) = std::env::var("GRUMPY_ICON")
-    {
-        let scale = std::env::var("GRUMPY_ICON_SCALE")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0.36);
-        render_icon(&path, scale).await;
-        return;
+fn env_parse<T: std::str::FromStr>(name: &str) -> Option<T> {
+    std::env::var(name).ok().and_then(|v| v.trim().parse().ok())
+}
+
+fn shot_from_env() -> Option<Shot> {
+    if cfg!(target_arch = "wasm32") {
+        return None;
     }
-    let mut app = App::new();
-    let shot = if cfg!(target_arch = "wasm32") {
-        None
-    } else {
-        std::env::var("GRUMPY_SHOT").ok().map(|path| Shot {
-            path,
-            frames: std::env::var("GRUMPY_FRAMES")
-                .ok()
-                .and_then(|f| f.parse().ok())
-                .unwrap_or(90),
-            launch: pull_from_env("GRUMPY_LAUNCH"),
-            aim: pull_from_env("GRUMPY_AIM"),
-            tap: std::env::var("GRUMPY_TAP")
-                .ok()
-                .and_then(|v| v.parse().ok()),
-        })
-    };
+    std::env::var("GRUMPY_SHOT").ok().map(|path| Shot {
+        path,
+        frames: env_parse("GRUMPY_FRAMES").unwrap_or(90),
+        launch: pull_from_env("GRUMPY_LAUNCH"),
+        aim: pull_from_env("GRUMPY_AIM"),
+        tap: env_parse("GRUMPY_TAP"),
+    })
+}
+
+/// Dev aids configured by environment variables (see the README).
+fn apply_dev_env(app: &mut App) {
     if std::env::var("GRUMPY_MIRROR").is_ok_and(|v| v == "1") {
         app.mirrored = true;
     }
@@ -1037,7 +1192,7 @@ async fn main() {
         Ok("friends") => app.tab = menu::Tab::Friends,
         _ => {}
     }
-    // Dev aid: `GRUMPY_LAUNCHER=x,y` stands the sling on a platform at (x, y).
+    // `GRUMPY_LAUNCHER=x,y` stands the sling on a platform at (x, y).
     if let Some((x, y)) = std::env::var("GRUMPY_LAUNCHER").ok().and_then(|v| {
         let (x, y) = v.split_once(',')?;
         Some((x.trim().parse::<f32>().ok()?, y.trim().parse::<f32>().ok()?))
@@ -1053,31 +1208,117 @@ async fn main() {
             });
         }
     }
-    if let Some(level) = std::env::var("GRUMPY_LEVEL")
-        .ok()
-        .and_then(|l| l.parse::<usize>().ok())
-    {
+    if let Some(level) = env_parse::<usize>("GRUMPY_LEVEL") {
         app.start(level.saturating_sub(1).min(app.levels.len() - 1));
     }
+    // `GRUMPY_EDIT=n` opens level n in the editor (0 = a new level), with
+    // `GRUMPY_EDIT_SELECT=i` and `GRUMPY_EDIT_CAT=earth|blocks|wolves|pigs`.
+    if let Some(n) = env_parse::<usize>("GRUMPY_EDIT") {
+        let mut ed = match n {
+            0 => editor::Editor::new_level(&app.me),
+            n => {
+                let level = app.levels[(n - 1).min(app.levels.len() - 1)].clone();
+                editor::Editor::open(level, None, "Elliot")
+            }
+        };
+        let category = std::env::var("GRUMPY_EDIT_CAT").ok();
+        ed.dev_setup(env_parse("GRUMPY_EDIT_SELECT"), category.as_deref());
+        app.open_editor(ed);
+    }
+}
+
+/// `GRUMPY_INPUT="10:p:435:659;15:m:600:300;20:r:600:300"` replays pointer
+/// events (frame:press|move|release:x:y, in screen points) for testing.
+struct InputScript {
+    events: Vec<(u32, char, Vec2)>,
+    held: Option<Vec2>,
+}
+
+impl InputScript {
+    fn from_env() -> Self {
+        let events = std::env::var("GRUMPY_INPUT")
+            .unwrap_or_default()
+            .split(';')
+            .filter_map(|ev| {
+                let mut f = ev.split(':');
+                let frame = f.next()?.trim().parse().ok()?;
+                let kind = f.next()?.chars().next()?;
+                let x = f.next()?.parse().ok()?;
+                let y = f.next()?.parse().ok()?;
+                Some((frame, kind, vec2(x, y)))
+            })
+            .collect();
+        InputScript { events, held: None }
+    }
+
+    fn input(&mut self, frame: u32) -> Option<Input> {
+        if self.events.is_empty() {
+            return None;
+        }
+        let mut input = Input {
+            down: self.held,
+            pos: self.held.unwrap_or_default(),
+            ..Input::default()
+        };
+        for &(_, kind, p) in self.events.iter().filter(|e| e.0 == frame) {
+            match kind {
+                'p' => {
+                    input.pressed = Some(p);
+                    self.held = Some(p);
+                }
+                'm' => self.held = Some(p),
+                _ => {
+                    input.released = true;
+                    self.held = None;
+                }
+            }
+            input.down = self.held;
+            input.pos = p;
+        }
+        Some(input)
+    }
+}
+
+/// Screenshot mode: launches / taps / aims on cue.
+fn drive_shot(shot: &Shot, app: &mut App, frame: u32, launched_at: &mut Option<f32>) {
+    let Screen::Play { game, .. } = &mut app.screen else {
+        return;
+    };
+    if frame == 80
+        && let Some(p) = shot.launch
+    {
+        game.launch(p);
+        *launched_at = Some(game.time);
+    }
+    if let (Some(tap), Some(t0)) = (shot.tap, *launched_at)
+        && game.time - t0 >= tap
+    {
+        game.ability();
+    }
+    if shot.aim.is_some() && game.phase == Phase::Aiming {
+        game.aim = shot.aim;
+    }
+}
+
+#[macroquad::main(conf)]
+async fn main() {
+    if !cfg!(target_arch = "wasm32")
+        && let Ok(path) = std::env::var("GRUMPY_ICON")
+    {
+        render_icon(&path, env_parse("GRUMPY_ICON_SCALE").unwrap_or(0.36)).await;
+        return;
+    }
+    let mut app = App::new();
+    let shot = shot_from_env();
+    apply_dev_env(&mut app);
+    let mut script = InputScript::from_env();
     let mut frame = 0u32;
     let mut launched_at = None;
     loop {
-        if let (Some(shot), Screen::Play { game, .. }) = (&shot, &mut app.screen) {
-            if frame == 80
-                && let Some(p) = shot.launch
-            {
-                game.launch(p);
-                launched_at = Some(game.time);
-            }
-            if let (Some(tap), Some(t0)) = (shot.tap, launched_at)
-                && game.time - t0 >= tap
-            {
-                game.ability();
-            }
-            if shot.aim.is_some() && game.phase == Phase::Aiming {
-                game.aim = shot.aim;
-            }
+        if let Some(shot) = &shot {
+            drive_shot(shot, &mut app, frame, &mut launched_at);
         }
+        app.scripted = script.input(frame);
         clear_background(BLACK);
         app.frame();
         frame += 1;
@@ -1085,14 +1326,6 @@ async fn main() {
             && frame >= shot.frames
         {
             get_screen_data().export_png(&shot.path);
-            if let Screen::Play { game, .. } = &app.screen {
-                eprintln!(
-                    "phase={:?} laugh={:.2} pigs_left={}",
-                    game.phase,
-                    app.laugh,
-                    game.pigs_left.len()
-                );
-            }
             break;
         }
         next_frame().await;

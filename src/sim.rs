@@ -214,6 +214,29 @@ pub struct Ent {
 }
 
 impl Ent {
+    /// A stand-alone entity for drawing (palette thumbnails, editor ghosts);
+    /// it isn't part of any physics world.
+    pub fn preview(kind: Kind, shape: Shape, pos: V2, angle: f32, seed: u32) -> Self {
+        Ent {
+            handle: RigidBodyHandle::invalid(),
+            col: ColliderSet::invalid_handle(),
+            kind,
+            shape,
+            hp: 1.0,
+            max_hp: 1.0,
+            pos,
+            angle,
+            hurt_flash: 0.0,
+            vel: V2::ZERO,
+            impact: 0.0,
+            impact_dir: V2::X,
+            alive: true,
+            seed,
+            puff: None,
+            prev_v: V2::ZERO,
+        }
+    }
+
     pub fn hp_frac(&self) -> f32 {
         (self.hp / self.max_hp).clamp(0.0, 1.0)
     }
@@ -346,6 +369,8 @@ impl Launcher {
 pub struct Level {
     pub name: String,
     pub author: String,
+    /// Credit for a remix: the author of the level this one was made from.
+    pub based_on: String,
     pub theme: Theme,
     pub launcher: Launcher,
     pub pieces: Vec<Piece>,

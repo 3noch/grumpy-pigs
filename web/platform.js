@@ -10,7 +10,10 @@
   var HOTSPOT_FULLSCREEN = 1;
   var HOTSPOT_INSTALL = 2;
   var HOTSPOT_SHARE = 3;
+  var HOTSPOT_PROMPT = 4;
   var shareText = "";
+  var armedPrompt = null;
+  var promptAnswers = {};
   var shareResult = 0; // 1 shared, 2 copied, 3 failed
   var pendingLink = null;
 
@@ -52,9 +55,14 @@
     }
   }
 
-  function share() {
-    if (!shareText) return;
-    var text = shareText;
+  function ask(p) {
+    if (!p) return;
+    var answer = window.prompt(p.title, p.def);
+    if (answer !== null) promptAnswers[p.id] = answer;
+  }
+
+  function share(text) {
+    if (!text) return;
     if (navigator.share) {
       navigator.share({ title: "Grumpy Pigs level", url: text }).then(
         function () { shareResult = 1; },
@@ -167,7 +175,8 @@
       if (x >= h.x && x <= h.x + h.w && y >= h.y && y <= h.y + h.h) {
         if (h.id === HOTSPOT_FULLSCREEN) toggleFullscreen();
         if (h.id === HOTSPOT_INSTALL) promptInstall();
-        if (h.id === HOTSPOT_SHARE) share();
+        if (h.id === HOTSPOT_SHARE) share(h.text);
+        if (h.id === HOTSPOT_PROMPT) ask(h.prompt);
         return;
       }
     }
@@ -200,8 +209,23 @@
       env.gp_hotspots_clear = function () {
         hotspots.length = 0;
       };
+      // Each hotspot keeps the share text / prompt that was set just before
+      // it was registered, so several Share buttons can coexist.
       env.gp_hotspot = function (id, x, y, w, h) {
-        hotspots.push({ id: id, x: x, y: y, w: w, h: h });
+        hotspots.push({ id: id, x: x, y: y, w: w, h: h, text: shareText, prompt: armedPrompt });
+        armedPrompt = null;
+      };
+      env.gp_prompt_arm = function (id, tptr, tlen, dptr, dlen) {
+        armedPrompt = { id: id, title: readStr(tptr, tlen), def: readStr(dptr, dlen) };
+      };
+      env.gp_prompt_len = function (id) {
+        var a = promptAnswers[id];
+        return a == null ? -1 : utf8(a).length;
+      };
+      env.gp_prompt_read = function (id, dst) {
+        var b = utf8(promptAnswers[id] || "");
+        delete promptAnswers[id];
+        memBytes(dst, b.length).set(b);
       };
       // Small integer preferences, remembered in this browser.
       env.gp_pref_get = function (key) {

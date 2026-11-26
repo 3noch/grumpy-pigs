@@ -30,6 +30,26 @@ procedurally, so there are no asset files.
 
 12 levels, from "Straw Hut" to "Big Bad Boss".
 
+## Level editor
+
+Title screen → **My levels** → **+ New**, or tap the pencil while playing any level
+to remix it (remixes credit the original author).
+
+- **Earth / Blocks / Wolves / Pigs** palette along the bottom: drag a piece out and
+  it drops onto whatever is below it (turn **Snap** off to place pieces freely).
+  Blocks come in straw, wood, brick and ice, plus TNT and boulders.
+- Tap a piece to select it: rotate in 10° steps, resize, copy, delete; tapping a
+  material restyles the selected block. Drag the slingshot to move it, even onto a ledge.
+- Drag empty space to pan; **+ / −** or the mouse wheel to zoom.
+- Pieces that would fall over by themselves are outlined in red (the editor runs a
+  couple of seconds of physics after each change).
+- **Undo / Redo** step through previous versions of the level (each is a level code).
+- **Test** plays it; the in-game menu button comes back to the editor.
+- **Save** overwrites your level, **Save copy** keeps both. Tap the name or the
+  "by …" line to rename the level or set your name (remembered on the device).
+- **Paste link** (From friends tab) imports a level from a copied link; handy in the
+  installed iPhone app, where links open in Safari instead.
+
 ## Sharing levels
 
 Every level can be shared as a link: tap the share button while playing (or on a
@@ -120,10 +140,17 @@ Not yet built or tested on devices. These are the standard macroquad routes:
 - `src/art.rs`: the animated characters. Pigs and wolves have moods (idle, aim, yell, dizzy, cheer / smug, worried, hurt, laugh), blinking, gaze tracking and squash-and-stretch.
 - `src/render.rs`: scenery, material-shaded blocks, sling, HUD helpers.
 - `src/main.rs`: input, HUD, particles, end screens; `src/menu.rs`: title screen, level tabs, shared-level card.
-- `src/share.rs`: the level link format; `src/bank.rs`: saved levels.
+- `src/share.rs`: the level link format; `src/bank.rs`: saved levels; `src/editor.rs`: the level editor.
 - `src/platform.rs` + `web/platform.js`: fullscreen and install-as-app glue.
 
 Lints: `clippy::pedantic` is on (see `[lints.clippy]` in `Cargo.toml`); `cargo clippy --all-targets` should stay at zero warnings.
 
-Dev aid: `GRUMPY_SHOT=out.png GRUMPY_LEVEL=3 GRUMPY_LAUNCH=14,1.0 GRUMPY_FRAMES=300 cargo run --release`
-renders a scene to a PNG and exits (`GRUMPY_AIM=deg,pow` freezes mid-aim instead).
+Dev aids (desktop build, environment variables):
+
+- `GRUMPY_SHOT=out.png GRUMPY_FRAMES=300` renders frames then saves a PNG and exits.
+- `GRUMPY_LEVEL=3`, `GRUMPY_LAUNCH=deg,pow`, `GRUMPY_TAP=secs`, `GRUMPY_AIM=deg,pow`: play a level and shoot.
+- `GRUMPY_EDIT=n` (0 = new), `GRUMPY_EDIT_SELECT=i`, `GRUMPY_EDIT_CAT=earth|blocks|wolves|pigs`: open the editor.
+- `GRUMPY_INPUT="10:p:435:659;14:m:600:350;18:r:640:300"`: replay pointer events
+  (frame:press/move/release:x:y in screen points), e.g. to test editor drags.
+- `GRUMPY_MIRROR=1`, `GRUMPY_TAB=mine|friends`, `GRUMPY_LAUNCHER=x,y`.
+- Set `HOME` to a scratch folder to keep test runs out of your real `~/.grumpy-pigs`.

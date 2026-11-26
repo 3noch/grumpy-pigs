@@ -21,6 +21,7 @@
 //! | 1   | name     | UTF-8 |
 //! | 3   | author   | UTF-8 |
 //! | 5   | theme    | varint theme id (unknown ids fall back to Meadow) |
+//! | 7   | based on | UTF-8: author of the level this one remixes |
 //! | 2   | pigs     | varint pig ids, in launch order |
 //! | 4   | pieces   | piece* |
 //! | 6   | launcher | x:zigzag y:zigzag (cm; the point under the sling's base), then future fields. Omitted = (6 m, 0) |
@@ -49,6 +50,7 @@ pub const PREFIX: &str = "L1.";
 const TAG_NAME: u64 = 1;
 const TAG_AUTHOR: u64 = 3;
 const TAG_THEME: u64 = 5;
+const TAG_BASED_ON: u64 = 7;
 const TAG_PIGS: u64 = 2;
 const TAG_PIECES: u64 = 4;
 const TAG_LAUNCHER: u64 = 6;
@@ -224,6 +226,9 @@ pub fn encode_bytes(level: &Level) -> Vec<u8> {
     if !level.author.is_empty() {
         put_record(&mut out, TAG_AUTHOR, level.author.as_bytes());
     }
+    if !level.based_on.is_empty() {
+        put_record(&mut out, TAG_BASED_ON, level.based_on.as_bytes());
+    }
     if level.theme != Theme::default() {
         let mut b = Vec::new();
         put_varint(&mut b, theme_id(level.theme));
@@ -363,6 +368,7 @@ pub fn decode_bytes(bytes: &[u8]) -> Result<Level, DecodeError> {
             TAG_NAME => level.name = String::from_utf8_lossy(payload).into_owned(),
             TAG_AUTHOR => level.author = String::from_utf8_lossy(payload).into_owned(),
             TAG_THEME => level.theme = theme_from_id(Reader::new(payload).varint()?),
+            TAG_BASED_ON => level.based_on = String::from_utf8_lossy(payload).into_owned(),
             TAG_PIGS => {
                 let mut p = Reader::new(payload);
                 while !p.done() {
@@ -670,6 +676,7 @@ mod tests {
         let lvl = Level {
             name: "Ünïcødé 🐷 level".into(),
             author: "Zoë".into(),
+            based_on: "Bjørn".into(),
             ..Level::default()
         };
         let back = decode(&encode(&lvl)).unwrap();

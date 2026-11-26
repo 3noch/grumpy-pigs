@@ -31,6 +31,8 @@ enum Action {
     None,
     PlayBuiltin(usize),
     Play(Level),
+    Edit(Level),
+    NewLevel,
     Save(Level),
     Delete(String, Shelf),
 }
@@ -134,15 +136,15 @@ impl App {
         if menu_corner_controls(ui_input, self.mirrored) {
             self.toggle_mirror();
         }
-        self.tabs(ui_input);
+        let tab_action = self.tabs(ui_input);
         let action = match self.tab {
             Tab::Levels => self.builtin_grid(ui_input),
             Tab::Mine => self.bank_cards(Shelf::Mine, ui_input),
             Tab::Friends => self.bank_cards(Shelf::Friends, ui_input),
         };
-        let action = match action {
-            Action::None => self.incoming_card(input),
-            a => a,
+        let action = match (action, tab_action) {
+            (Action::None, Action::None) => self.incoming_card(input),
+            (Action::None, a) | (a, _) => a,
         };
         self.apply(action);
     }
@@ -152,6 +154,11 @@ impl App {
             Action::None => {}
             Action::PlayBuiltin(i) => self.start(i),
             Action::Play(level) => self.start_custom(level),
+            Action::Edit(level) => self.edit_level(level),
+            Action::NewLevel => {
+                let ed = crate::editor::Editor::new_level(&self.me);
+                self.open_editor(ed);
+            }
             Action::Save(level) => {
                 if self.bank.add(&level, Shelf::Friends) {
                     self.toast("Saved to From friends");
@@ -185,7 +192,8 @@ impl App {
         art::wolf(&deco, boss, V2::new(35.0, 0.95), 0.0, 0.95, 1.0, 0.0, &smug);
     }
 
-    fn tabs(&mut self, input: &Input) {
+    /// The tab row, plus the current tab's action button (New / Paste link).
+    fn tabs(&mut self, input: &Input) -> Action {
         let u = ui_unit();
         let sw = screen_width();
         let mine = self.bank.on_shelf(Shelf::Mine).count();
@@ -196,7 +204,8 @@ impl App {
             (Tab::Friends, format!("From friends ({friends})")),
         ];
         let (w, h, gap) = (u * 0.34, u * 0.075, u * 0.02);
-        let x0 = (sw - (w * 3.0 + gap * 2.0)) / 2.0;
+        let action_w = u * 0.24;
+        let x0 = (sw - (w * 3.0 + gap * 3.0 + action_w)) / 2.0;
         let y = screen_height() * 0.255;
         for (i, (tab, label)) in tabs.into_iter().enumerate() {
             let r = Rect::new(x0 + i as f32 * (w + gap), y, w, h);
@@ -212,6 +221,39 @@ impl App {
                 self.confirm_delete = None;
             }
         }
+        let r = Rect::new(x0 + 3.0 * (w + gap), y, action_w, h);
+        match self.tab {
+            Tab::Levels => {}
+            Tab::Mine => {
+                if button(r, "+ New", input, GREEN) {
+                    return Action::NewLevel;
+                }
+            }
+            Tab::Friends => {
+                crate::platform::prompt_hotspot(
+                    r,
+                    crate::platform::Ask::PasteLink,
+                    "Paste a level link",
+                    "",
+                );
+                if button(r, "Paste link", input, GREEN) {
+                    // The web opens a prompt from the hotspot instead.
+                    #[cfg(not(target_arch = "wasm32"))]
+                    self.paste_link_natively();
+                }
+            }
+        }
+        Action::None
+    }
+
+    /// Desktop builds read a pasted link straight from the clipboard.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn paste_link_natively(&mut self) {
+        let text = crate::platform::clipboard().unwrap_or_default();
+        self.incoming = Some(Incoming {
+            level: share::decode(&text),
+            saved: false,
+        });
     }
 
     fn builtin_grid(&self, input: &Input) -> Action {
@@ -277,12 +319,12 @@ impl App {
         if entries.is_empty() {
             let lines: &[&str] = match place {
                 Shelf::Mine => &[
-                    "Levels you make will show up here.",
-                    "(The level editor is coming next!)",
+                    "Tap + New to build a level,",
+                    "or tap the pencil while playing any level to remix it.",
                 ],
                 Shelf::Friends => &[
-                    "Open a level link a friend sent you and tap Save.",
-                    "Share any level with the share button while you play it.",
+                    "Open a level link a friend sent you and tap Save,",
+                    "or copy the link and tap Paste link.",
                 ],
             };
             for (i, line) in lines.iter().enumerate() {
@@ -399,6 +441,10 @@ impl App {
                 }
                 let share_r = Rect::new(play.right() + pad * 0.6, by, bh, bh);
                 share_button(share_r, level, input);
+                let edit_r = Rect::new(share_r.right() + pad * 0.6, by, bh, bh);
+                if icon_button(edit_r, Icon::Pencil, input, SLATE) {
+                    action = Action::Edit(level.clone());
+                }
             }
         }
 
