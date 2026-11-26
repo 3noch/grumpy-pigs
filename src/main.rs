@@ -91,6 +91,10 @@ struct App {
     laugh: f32,
     trail_t: f32,
     aim_start: Option<Vec2>,
+    /// How far the player has moved the camera while playing (meters).
+    pan: V2,
+    /// A pan drag in progress: where it started and the pan at that moment.
+    pan_drag: Option<(Vec2, V2)>,
     /// Left-handed mode: sling on the right, firing left.
     mirrored: bool,
     time: f32,
@@ -551,6 +555,8 @@ impl App {
             laugh: 0.0,
             trail_t: 0.0,
             aim_start: None,
+            pan: V2::ZERO,
+            pan_drag: None,
             mirrored: platform::pref(platform::Pref::Mirror),
             time: 0.0,
             bank: bank::Bank::load(),
@@ -710,6 +716,8 @@ impl App {
         self.fleeing.clear();
         self.popups.clear();
         self.aim_start = None;
+        self.pan = V2::ZERO;
+        self.pan_drag = None;
         self.screen = Screen::Play {
             src,
             game: Box::new(Game::new(&level)),
@@ -753,6 +761,8 @@ impl App {
         self.shake = (self.shake - dt * 3.0).max(0.0);
         let view = if let (Screen::Edit, Some(ed)) = (&self.screen, &self.editor) {
             ed.view(self.mirrored)
+        } else if matches!(self.screen, Screen::Play { .. }) {
+            View::fit(shake, self.mirrored).panned(self.pan)
         } else {
             View::fit(shake, self.mirrored)
         };
@@ -847,9 +857,27 @@ impl App {
     }
 
     fn handle_input(&mut self, game: &mut Game, input: &Input, view: &View) {
+        // Drags that don't start at the sling look around the level.
+        let at_sling = |p: Vec2| {
+            let reach = (view.s * 1.8).max(ui_unit() * 0.12);
+            (p - view.v(game.pouch())).length() <= reach
+        };
+        if let Some(p) = input.pressed
+            && !(game.phase == Phase::Aiming && at_sling(p))
+        {
+            self.pan_drag = Some((p, self.pan));
+        }
+        if let (Some((start, pan0)), Some(cur)) = (self.pan_drag, input.down) {
+            let still = View::fit(Vec2::ZERO, self.mirrored).panned(pan0);
+            let moved = still.unproject(cur) - still.unproject(start);
+            self.pan = (pan0 - moved).clamp(V2::new(-20.0, 0.0), V2::new(30.0, 20.0));
+        }
+        if input.released {
+            self.pan_drag = None;
+        }
         match game.phase {
             Phase::Aiming => {
-                if let Some(p) = input.pressed {
+                if let Some(p) = input.pressed.filter(|&p| at_sling(p)) {
                     self.aim_start = Some(p);
                 }
                 if let (Some(start), Some(cur)) = (self.aim_start, input.down) {
@@ -1221,7 +1249,7 @@ impl App {
                 && src == Source::Builtin(0)
                 && game.pigs_left.len() == level.pigs.len() =>
             {
-                "Drag back and release to fling!"
+                "Pull back from the sling to fling!"
             }
             _ => "",
         };

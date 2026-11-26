@@ -302,7 +302,7 @@ impl App {
             }
         }
         render::text_centered(
-            "Pull back anywhere to aim  -  release to fling  -  tap mid-air for powers",
+            "Pull back from the sling to aim  -  drag elsewhere to look around  -  tap mid-air for powers",
             sw / 2.0,
             sh * 0.855,
             u * 0.032,

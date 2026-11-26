@@ -43,6 +43,13 @@ impl View {
             mirror: mirrored.then_some(screen_width()),
         }
     }
+    /// The same view with the camera moved by `pan` meters.
+    #[must_use]
+    pub fn panned(mut self, pan: crate::sim::V2) -> Self {
+        self.ox -= pan.x * self.s;
+        self.oy += pan.y * self.s;
+        self
+    }
     pub fn p(&self, x: f32, y: f32) -> Vec2 {
         let sx = self.ox + x * self.s;
         let sx = self.mirror.map_or(sx, |w| w - sx);
