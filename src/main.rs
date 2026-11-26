@@ -711,13 +711,22 @@ impl App {
         self.begin(Source::Custom, level);
     }
 
-    fn begin(&mut self, src: Source, level: Level) {
+    /// Clears everything left over from playing a level: effects, the
+    /// wolves' laughing fit, screen shake, aiming and the camera.
+    fn reset_play_effects(&mut self) {
         self.particles.clear();
         self.fleeing.clear();
         self.popups.clear();
+        self.laugh = 0.0;
+        self.shake = 0.0;
+        self.trail_t = 0.0;
         self.aim_start = None;
         self.pan = V2::ZERO;
         self.pan_drag = None;
+    }
+
+    fn begin(&mut self, src: Source, level: Level) {
+        self.reset_play_effects();
         self.screen = Screen::Play {
             src,
             game: Box::new(Game::new(&level)),
@@ -836,6 +845,9 @@ impl App {
 
         let level_copy = (*level).clone();
         self.screen = Screen::Play { src, level, game };
+        if matches!(nav, Nav::Menu | Nav::Edit) {
+            self.reset_play_effects();
+        }
         match nav {
             Nav::Stay => {}
             Nav::Menu | Nav::Edit if src == Source::Editor => self.screen = Screen::Edit,
