@@ -196,6 +196,17 @@ pub enum Shape {
     Ball { r: f32 },
 }
 
+/// How big a TNT crate is next to the standard 0.8 m one (by side length):
+/// bigger crates make bigger, stronger blasts.
+fn blast_scale(shape: Shape) -> f32 {
+    const STANDARD_AREA: f32 = 0.8 * 0.8;
+    let area = match shape {
+        Shape::Box { hw, hh } => 4.0 * hw * hh,
+        Shape::Ball { r } => std::f32::consts::PI * r * r,
+    };
+    (area / STANDARD_AREA).sqrt().clamp(0.5, 3.0)
+}
+
 pub struct Ent {
     pub handle: RigidBodyHandle,
     col: ColliderHandle,
@@ -428,8 +439,9 @@ pub struct Game {
     /// Current sling pull (offset from pouch), set by input while aiming.
     pub aim: Option<V2>,
     acc: f32,
-    /// Explosions queued by destroyed TNT, set off after this step's removals.
-    blasts: Vec<V2>,
+    /// Explosions queued by destroyed TNT (where, and how big the crate
+    /// was), set off after this step's removals.
+    blasts: Vec<(V2, f32)>,
     combo: u32,
     last_ko: f32,
 }
@@ -761,7 +773,7 @@ impl Game {
         }
         e.alive = false;
         e.hp = e.hp.min(0.0);
-        let (pos, kind) = (e.pos, e.kind);
+        let (pos, kind, shape) = (e.pos, e.kind, e.shape);
         self.world.remove_body(e.handle);
         let points = match kind {
             _ if !award => 0,
@@ -775,7 +787,7 @@ impl Game {
             kind => Event::Destroyed { pos, kind, points },
         });
         if kind == Kind::Block(Material::Tnt) {
-            self.blasts.push(pos);
+            self.blasts.push((pos, blast_scale(shape)));
         }
         if award && kind.is_wolf() {
             self.combo = if self.time - self.last_ko < COMBO_WINDOW {
@@ -967,8 +979,9 @@ impl Game {
         }
         // TNT goes off after removals; anything it destroys is removed next
         // step, which lets chain reactions ripple outward.
-        for center in std::mem::take(&mut self.blasts) {
-            self.explode_at(center, 3.4, 1.1, None);
+        for (center, scale) in std::mem::take(&mut self.blasts) {
+            let grow = scale.sqrt();
+            self.explode_at(center, 3.4 * grow, 1.1 * grow, None);
         }
 
         if let Phase::Flying { impact_t, .. } = &mut self.phase
@@ -1256,6 +1269,17 @@ mod tests {
         assert!(g.events.iter().any(|e| matches!(e, Event::Flee { .. })));
         run(&mut g, 120);
         assert!(g.ents[1].pos.y < 1.0, "the crate didn't fall");
+    }
+
+    #[test]
+    fn bigger_tnt_makes_a_bigger_blast() {
+        let crate_of = |side: f32| Shape::Box {
+            hw: side / 2.0,
+            hh: side / 2.0,
+        };
+        assert!((blast_scale(crate_of(0.8)) - 1.0).abs() < 1e-5);
+        assert!((blast_scale(crate_of(1.6)) - 2.0).abs() < 1e-5);
+        assert!(blast_scale(crate_of(0.4)) < 1.0);
     }
 
     #[test]

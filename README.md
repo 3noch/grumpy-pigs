@@ -24,7 +24,7 @@ procedurally, so there are no asset files.
 - **Wolves**: Pups (fragile), Wolves, Helmet wolves (a cooking pot doubles their toughness)
   and the Big Bad Boss.
 - **Materials**: straw, wood, brick, slippery and brittle **ice**, and **TNT** crates that
-  explode when destroyed and can set each other off.
+  explode when destroyed and can set each other off. Bigger crates make bigger blasts.
 - **Boulders and ramps**: knock a boulder loose and let it roll downhill into a fort.
 - **Fairies**: hover in mid-air holding up whatever rests on them, so structures can
   float. Hit one (with a pig, flying debris or a blast) and she flies away, dropping
