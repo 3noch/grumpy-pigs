@@ -425,26 +425,38 @@ impl App {
             let bh = ch * 0.28;
             let by = card.bottom() - pad - bh;
             let confirming = self.confirm_delete.as_deref() == Some(id.as_str());
-            let del = Rect::new(card.right() - pad - bh, by, bh, bh);
             if confirming {
-                let sure = Rect::new(card.right() - pad - bh * 3.2, by, bh * 3.2, bh);
-                if button(sure, "Delete?", input, RED) {
+                // Only the choice at hand: keep it (X) or really delete.
+                let keep = Rect::new(card.x + pad, by, bh * 1.4, bh);
+                if icon_button(keep, Icon::Close, input, SLATE) {
+                    self.confirm_delete = None;
+                }
+                let sure = Rect::new(
+                    keep.right() + pad,
+                    by,
+                    card.right() - pad - keep.right() - pad,
+                    bh,
+                );
+                if icon_label_button(sure, Icon::Trash, "Delete!", input, RED) {
                     action = Action::Delete(id.clone());
                 }
-            } else if icon_button(del, Icon::Trash, input, RED) {
-                self.confirm_delete = Some(id.clone());
-            }
-            if let Ok(level) = level {
-                let play = Rect::new(card.x + pad, by, bh * 2.6, bh);
-                if icon_label_button(play, Icon::Play, "Play", input, ORANGE) {
-                    action = Action::Play(level.clone());
+            } else {
+                let del = Rect::new(card.right() - pad - bh, by, bh, bh);
+                if icon_button(del, Icon::Trash, input, RED) {
+                    self.confirm_delete = Some(id.clone());
                 }
-                let share_r = Rect::new(play.right() + pad * 0.6, by, bh, bh);
-                share_button(share_r, level, input);
-                let edit_r = Rect::new(share_r.right() + pad * 0.6, by, bh, bh);
-                if icon_button(edit_r, Icon::Pencil, input, SLATE) {
-                    let mine = (place == Shelf::Mine).then(|| id.clone());
-                    action = Action::Edit(level.clone(), mine);
+                if let Ok(level) = level {
+                    let play = Rect::new(card.x + pad, by, bh * 2.6, bh);
+                    if icon_label_button(play, Icon::Play, "Play", input, ORANGE) {
+                        action = Action::Play(level.clone());
+                    }
+                    let share_r = Rect::new(play.right() + pad * 0.6, by, bh, bh);
+                    share_button(share_r, level, input);
+                    let edit_r = Rect::new(share_r.right() + pad * 0.6, by, bh, bh);
+                    if icon_button(edit_r, Icon::Pencil, input, SLATE) {
+                        let mine = (place == Shelf::Mine).then(|| id.clone());
+                        action = Action::Edit(level.clone(), mine);
+                    }
                 }
             }
         }
