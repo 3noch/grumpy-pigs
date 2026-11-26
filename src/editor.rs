@@ -1086,7 +1086,14 @@ impl App {
         let cats = [
             (Category::Earth, "Earth"),
             (Category::Blocks, "Blocks"),
-            (Category::Wolves, "Wolves"),
+            (
+                Category::Wolves,
+                if crate::holiday::thanksgiving() {
+                    "Turkeys"
+                } else {
+                    "Wolves"
+                },
+            ),
             (Category::Pigs, "Pigs"),
             (Category::Magic, "Magic"),
         ];

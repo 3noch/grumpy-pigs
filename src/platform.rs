@@ -59,6 +59,7 @@ mod imp {
     #[link(wasm_import_module = "env")]
     unsafe extern "C" {
         fn gp_fullscreen_state() -> i32;
+        fn gp_local_date() -> i32;
         fn gp_install_state() -> i32;
         fn gp_hotspots_clear();
         fn gp_hotspot(id: i32, x: f32, y: f32, w: f32, h: f32);
@@ -146,6 +147,10 @@ mod imp {
         // SAFETY: plain JS import taking and returning numbers.
         unsafe { gp_fullscreen_state() }
     }
+    pub fn local_date() -> i32 {
+        // SAFETY: as above.
+        unsafe { gp_local_date() }
+    }
     pub fn install_state() -> i32 {
         // SAFETY: as above.
         unsafe { gp_install_state() }
@@ -179,6 +184,17 @@ mod imp {
     }
     pub fn install_state() -> i32 {
         0
+    }
+    /// Today's local date as `yyyymmdd`, asking the system's `date` tool
+    /// (there's no time zone database in the standard library).
+    pub fn local_date() -> i32 {
+        std::process::Command::new("date")
+            .arg("+%Y%m%d")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0)
     }
     pub fn hotspots_clear() {}
     pub fn hotspot(_id: i32, _x: f32, _y: f32, _w: f32, _h: f32) {}
@@ -353,6 +369,13 @@ pub fn take_link() -> Option<String> {
     let link = imp::page_string(1)?;
     imp::link_clear();
     Some(link)
+}
+
+/// Today's local date as (year, month, day), if the platform knows it.
+pub fn local_date() -> Option<(i32, u32, u32)> {
+    let d = imp::local_date();
+    let (month, day) = (d / 100 % 100, d % 100);
+    (d > 0).then(|| (d / 10000, month.unsigned_abs(), day.unsigned_abs()))
 }
 
 /// The address shared links should point at: this page, minus any fragment.

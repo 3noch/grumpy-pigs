@@ -201,6 +201,10 @@
         return canFullscreen() ? 1 : 0;
       };
       // 0 = nothing to show, 1 = install prompt ready, 2 = iOS Share-sheet hint.
+      env.gp_local_date = function () {
+        const d = new Date();
+        return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
+      };
       env.gp_install_state = function () {
         if (standalone()) return 0;
         if (installPrompt) return 1;

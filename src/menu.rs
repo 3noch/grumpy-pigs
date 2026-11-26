@@ -113,20 +113,21 @@ impl App {
         draw_rectangle(0.0, 0.0, sw, sh, Color::new(0.0, 0.0, 0.0, 0.15));
         self.mascots();
 
-        render::text_centered(
-            "GRUMPY PIGS",
-            sw / 2.0,
-            sh * 0.15,
-            u * 0.13,
-            rgb(255, 170, 190),
-        );
-        render::text_centered(
-            "Those wolves took our mud. Get it back.",
-            sw / 2.0,
-            sh * 0.215,
-            u * 0.042,
-            WHITE,
-        );
+        let (title, tagline, title_color) = if crate::holiday::thanksgiving() {
+            (
+                "PECKISH PILGRIMS",
+                "Those turkeys took our pie. Get it back.",
+                rgb(255, 190, 110),
+            )
+        } else {
+            (
+                "GRUMPY PIGS",
+                "Those wolves took our mud. Get it back.",
+                rgb(255, 170, 190),
+            )
+        };
+        render::text_centered(title, sw / 2.0, sh * 0.15, u * 0.13, title_color);
+        render::text_centered(tagline, sw / 2.0, sh * 0.215, u * 0.042, WHITE);
 
         // While a shared-level card is up, it takes all the input.
         let blocked = Input::default();

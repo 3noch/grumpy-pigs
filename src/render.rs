@@ -159,8 +159,16 @@ fn tree(view: &View, x: f32, h: f32, s: f32, time: f32) {
         0.35 * s * view.s,
         rgb(110, 82, 60),
     );
-    let leaf_dark = rgb(70, 140, 70);
-    let leaf = rgb(92, 168, 84);
+    let (leaf_dark, leaf) = if crate::holiday::thanksgiving() {
+        // Autumn: each tree turns its own color.
+        match crate::gfx::count((x * 7.3).abs() % 3.0, 2) {
+            0 => (rgb(196, 84, 40), rgb(232, 128, 52)),
+            1 => (rgb(200, 140, 40), rgb(238, 186, 70)),
+            _ => (rgb(160, 52, 44), rgb(204, 82, 60)),
+        }
+    } else {
+        (rgb(70, 140, 70), rgb(92, 168, 84))
+    };
     for (dx, dy, r) in [(-0.6, 0.0, 0.9), (0.6, 0.1, 0.85), (0.0, 0.7, 1.0)] {
         let p = view.p(x + sway + dx * s, h * s + dy * s);
         draw_circle(p.x, p.y, r * s * view.s, leaf_dark);

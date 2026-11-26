@@ -2,8 +2,10 @@
 
 mod art;
 mod bank;
+mod costume;
 mod editor;
 mod gfx;
+mod holiday;
 mod levels;
 mod menu;
 mod platform;
@@ -1574,6 +1576,18 @@ fn drive_shot(shot: &Shot, app: &mut App, frame: u32, launched_at: &mut Option<f
     }
 }
 
+/// Which seasonal look to use today. `GRUMPY_HOLIDAY=thanksgiving|none`
+/// overrides it on desktop (dev aid).
+fn todays_holiday() -> holiday::Holiday {
+    match std::env::var("GRUMPY_HOLIDAY").ok().as_deref() {
+        Some("thanksgiving") => holiday::Holiday::Thanksgiving,
+        Some(_) => holiday::Holiday::None,
+        None => platform::local_date().map_or(holiday::Holiday::None, |(y, m, d)| {
+            holiday::for_date(y, m, d)
+        }),
+    }
+}
+
 #[macroquad::main(conf)]
 async fn main() {
     if !cfg!(target_arch = "wasm32")
@@ -1582,6 +1596,7 @@ async fn main() {
         render_icon(&path, env_parse("GRUMPY_ICON_SCALE").unwrap_or(0.36)).await;
         return;
     }
+    holiday::set(todays_holiday());
     let mut app = App::new();
     app.resume_editing();
     let shot = shot_from_env();

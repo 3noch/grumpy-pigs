@@ -33,6 +33,10 @@ procedurally, so there are no asset files.
 
 13 levels, from "Straw Hut" to "Big Bad Boss" and "Fairy Lift".
 
+**Easter egg:** on US Thanksgiving the game becomes *Peckish Pilgrims*: pilgrim-hatted
+pigs, turkeys instead of wolves, cherubs instead of fairies and autumn trees
+(`GRUMPY_HOLIDAY=thanksgiving` previews it on desktop).
+
 ## Level editor
 
 Title screen → **My levels** → **+ New**, or tap the pencil while playing any level

@@ -63,7 +63,7 @@ impl Anim {
     }
 }
 
-fn rig_for(view: &View, pos: V2, angle: f32, r: f32, a: &Anim, bounce: f32) -> Rig {
+pub(crate) fn rig_for(view: &View, pos: V2, angle: f32, r: f32, a: &Anim, bounce: f32) -> Rig {
     let rig = Rig::new(*view, pos, angle, r);
     if a.stretch.abs() > 0.005 {
         rig.stretched(a.stretch_dir, a.stretch)
@@ -75,7 +75,7 @@ fn rig_for(view: &View, pos: V2, angle: f32, r: f32, a: &Anim, bounce: f32) -> R
 }
 
 /// Pupil offset in local space toward the look direction.
-fn gaze(rig: &Rig, look: V2, reach: f32) -> P {
+pub(crate) fn gaze(rig: &Rig, look: V2, reach: f32) -> P {
     let d = rig.local_dir(look).normalize_or_zero() * reach;
     (d.x, d.y)
 }
@@ -232,6 +232,11 @@ pub fn pig(view: &View, kind: PigKind, pos: V2, angle: f32, a: &Anim) {
             (base.0 + ang.cos() * 0.15, base.1 + ang.sin() * 0.15),
         );
         rig.poly(&inner, pal.dark, None);
+    }
+
+    let pilgrim = crate::holiday::thanksgiving();
+    if pilgrim {
+        pilgrim_collar(&rig, pal.line);
     }
 
     // --- Head ---
@@ -436,7 +441,15 @@ pub fn pig(view: &View, kind: PigKind, pos: V2, angle: f32, a: &Anim) {
     }
 
     // --- Per-kind gear ---
+    // On Thanksgiving a pilgrim hat replaces whatever grows on top.
+    let lift = if pilgrim {
+        pilgrim_hat(&rig, pal.line);
+        0.66
+    } else {
+        0.0
+    };
     match kind {
+        _ if pilgrim && matches!(kind, PigKind::Grunt | PigKind::Litter | PigKind::Piglet) => {}
         PigKind::Grunt => {
             // A defiant curl of hair.
             let curl: Vec<P> = (0..18)
@@ -457,10 +470,15 @@ pub fn pig(view: &View, kind: PigKind, pos: V2, angle: f32, a: &Anim) {
             rig.circle(back * 0.86, 0.5, 0.1, rgb(190, 30, 40));
         }
         PigKind::Boomer => {
-            let fuse = bez((0.05, 0.95), (0.05, 1.3), (0.35, 1.38), 8);
+            let fuse = bez(
+                (0.05, 0.95 + lift),
+                (0.05, 1.3 + lift),
+                (0.35, 1.38 + lift),
+                8,
+            );
             rig.stroke(&fuse, 0.1, pal.line);
             rig.stroke(&fuse, 0.05, rgb(170, 150, 120));
-            let (sx, sy) = (0.37, 1.4);
+            let (sx, sy) = (0.37, 1.4 + lift);
             let flick = 0.8 + 0.3 * (t * 37.0).sin() + a.glow * 0.6;
             rig.circle(sx, sy, 0.2 * flick, rgba(255, 170, 40, 0.35));
             for i in 0..6 {
@@ -503,8 +521,8 @@ pub fn pig(view: &View, kind: PigKind, pos: V2, angle: f32, a: &Anim) {
             rig.stroke(&curl, 0.06, pal.base);
         }
         PigKind::Thumper => {
-            // Mohawk
-            for i in 0..5 {
+            // Mohawk (under the hat on Thanksgiving)
+            for i in (0..5).filter(|_| !pilgrim) {
                 let x = -0.32 + i as f32 * 0.16;
                 let h = 0.32 - (x.abs() * 0.4);
                 rig.poly(
@@ -570,7 +588,7 @@ fn wolf_palette(kind: WolfKind, hurt: f32) -> WolfPalette {
 }
 
 /// The Helmet wolf's cooking pot, until it's knocked about.
-fn pot(rig: &Rig, line: Color) {
+pub(crate) fn pot(rig: &Rig, line: Color) {
     let metal_light = rgb(214, 218, 226);
     let metal = rgb(140, 146, 160);
     let dome: Vec<P> = (0..=16)
@@ -597,7 +615,8 @@ fn pot(rig: &Rig, line: Color) {
     }
 }
 
-/// A smug wolf. `hp` is 0..1, `hurt` is the recent-hit flash.
+/// A smug wolf. `hp` is 0..1, `hurt` is the recent-hit flash. On
+/// Thanksgiving, a smug turkey instead.
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
 pub fn wolf(
@@ -610,6 +629,10 @@ pub fn wolf(
     hurt: f32,
     a: &Anim,
 ) {
+    if crate::holiday::thanksgiving() {
+        crate::costume::turkey(view, kind, pos, angle, radius, hp, hurt, a);
+        return;
+    }
     let t = a.t;
     let bounce = match a.mood {
         Mood::Laugh => 0.07 * (t * 22.0).sin(),
@@ -915,7 +938,7 @@ pub fn wolf(
 }
 
 /// A tiny four-pointed twinkle.
-fn twinkle(rig: &Rig, x: f32, y: f32, size: f32, col: Color) {
+pub(crate) fn twinkle(rig: &Rig, x: f32, y: f32, size: f32, col: Color) {
     rig.ellipse(x, y, size, size * 0.22, 0.0, col);
     rig.ellipse(x, y, size * 0.22, size, 0.0, col);
 }
@@ -924,6 +947,10 @@ fn twinkle(rig: &Rig, x: f32, y: f32, size: f32, col: Color) {
 /// collider's radius. `startled` is set while she flees.
 #[allow(clippy::too_many_lines)]
 pub fn fairy(view: &View, pos: V2, r: f32, a: &Anim, startled: bool) {
+    if crate::holiday::thanksgiving() {
+        crate::costume::cherub(view, pos, r, a, startled);
+        return;
+    }
     let t = a.t + hash(a.seed, 9) * 10.0;
     let rig = Rig::new(*view, pos, 0.0, r);
     let line = rgb(92, 52, 120);
@@ -1094,4 +1121,55 @@ pub fn fairy(view: &View, pos: V2, r: f32, a: &Anim, startled: bool) {
             rgba(255, 250, 200, 0.5 + 0.5 * tw),
         );
     }
+}
+
+/// A wide white pilgrim collar, peeking out under the chin.
+fn pilgrim_collar(rig: &Rig, line: Color) {
+    let white = rgb(250, 248, 240);
+    for sx in [-1.0f32, 1.0] {
+        let flap = [
+            (0.0, -0.62),
+            (sx * 0.78, -0.66),
+            (sx * 0.66, -1.02),
+            (sx * 0.08, -1.12),
+        ];
+        rig.poly(&flap, white, Some((line, 0.05)));
+    }
+}
+
+/// A tall black pilgrim hat with a gold buckle, sitting on top of the head.
+fn pilgrim_hat(rig: &Rig, line: Color) {
+    let felt = rgb(54, 48, 56);
+    let felt_light = rgb(88, 80, 92);
+    let gold = rgb(240, 196, 70);
+    rig.ellipse(0.0, 0.86, 0.84, 0.15, 0.0, line);
+    rig.ellipse(0.0, 0.86, 0.78, 0.11, 0.0, felt);
+    rig.poly(
+        &[(-0.47, 0.86), (0.47, 0.86), (0.4, 1.56), (-0.4, 1.56)],
+        felt,
+        Some((line, 0.05)),
+    );
+    rig.ellipse(0.0, 1.56, 0.4, 0.07, 0.0, felt_light);
+    rig.poly(
+        &[(-0.34, 0.95), (-0.27, 0.95), (-0.22, 1.5), (-0.28, 1.5)],
+        alpha(felt_light, 0.7),
+        None,
+    );
+    // Band and buckle.
+    rig.poly(
+        &[(-0.465, 0.9), (0.465, 0.9), (0.45, 1.08), (-0.45, 1.08)],
+        rgb(28, 24, 30),
+        None,
+    );
+    rig.stroke(
+        &[
+            (-0.13, 0.89),
+            (0.13, 0.89),
+            (0.13, 1.09),
+            (-0.13, 1.09),
+            (-0.13, 0.89),
+        ],
+        0.06,
+        gold,
+    );
 }
