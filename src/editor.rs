@@ -10,7 +10,7 @@ use macroquad::prelude::*;
 
 use super::{App, Icon, Input, ORANGE, SLATE, Screen, Source, button, icon_button, ui_unit};
 use crate::art::{self, Anim, Mood};
-use crate::bank::Shelf;
+use crate::bank::{self, Shelf};
 use crate::gfx::{rgb, rgba};
 use crate::platform::{self, Ask};
 use crate::render::{self, View};
@@ -69,8 +69,9 @@ const DRAG_SLOP: f32 = 6.0;
 
 pub struct Editor {
     pub level: Level,
-    /// The "My levels" entry being edited (Save overwrites it), by code.
-    pub origin: Option<String>,
+    /// The "My levels" entry this saves into (by bank id). `None` until a
+    /// remix's first change, which creates the entry.
+    pub id: Option<String>,
     undo: Vec<String>,
     redo: Vec<String>,
     selection: Option<Selection>,
@@ -82,9 +83,8 @@ pub struct Editor {
     preview: Game,
     /// Pieces that move by themselves within a couple of seconds.
     wobbly: Vec<usize>,
-    /// Code at the last save, to tell whether there are unsaved changes.
-    saved: Option<String>,
-    confirm_leave: bool,
+    /// Code at the last save; changes are saved automatically.
+    saved: String,
     /// Camera: world point at the center of the scene (None = default) and zoom
     /// (1 = the play area's full width).
     center: Option<V2>,
@@ -93,22 +93,40 @@ pub struct Editor {
 
 const DEFAULT_PIGS: [PigKind; 3] = [PigKind::Grunt, PigKind::Grunt, PigKind::Grunt];
 
+/// A name for a new level, like "Soggy Summit".
+pub fn random_name() -> String {
+    const MOOD: [&str; 20] = [
+        "Muddy", "Wobbly", "Soggy", "Grumpy", "Rickety", "Windy", "Crumbly", "Sneaky", "Bumpy",
+        "Prickly", "Shaky", "Lumpy", "Dizzy", "Squishy", "Frosty", "Rumbly", "Tipsy", "Gusty",
+        "Creaky", "Stubborn",
+    ];
+    const PLACE: [&str; 20] = [
+        "Meadow", "Ridge", "Gulch", "Summit", "Hollow", "Fort", "Tower", "Hideout", "Burrow",
+        "Bluff", "Canyon", "Pen", "Barn", "Bridge", "Den", "Hill", "Stack", "Pile", "Keep",
+        "Lookout",
+    ];
+    let pick = |words: &[&'static str]| words[macroquad::rand::gen_range(0, words.len())];
+    format!("{} {}", pick(&MOOD), pick(&PLACE))
+}
+
 impl Editor {
-    /// Opens `level` for editing. With an `origin` it's one of my saved
-    /// levels; otherwise it's new or a remix, credited to its old author.
-    pub fn open(mut level: Level, origin: Option<String>, me: &str) -> Self {
-        if origin.is_none() {
+    /// Opens `level` for editing. With an `id` it's one of my saved levels
+    /// (its undo history comes back too); otherwise it's a remix, credited
+    /// to its old author.
+    pub fn open(mut level: Level, id: Option<String>, me: &str) -> Self {
+        if id.is_none() {
             if !level.author.is_empty() && level.author != me && level.based_on.is_empty() {
                 level.based_on.clone_from(&level.author);
             }
             me.clone_into(&mut level.author);
         }
-        let saved = origin.clone();
+        let saved = share::encode(&level);
+        let undo = id.as_deref().map_or_else(Vec::new, bank::load_history);
         let mut ed = Editor {
             preview: Game::new(&level),
             level,
-            origin,
-            undo: Vec::new(),
+            id,
+            undo,
             redo: Vec::new(),
             selection: None,
             drag: None,
@@ -117,7 +135,6 @@ impl Editor {
             snap: true,
             wobbly: Vec::new(),
             saved,
-            confirm_leave: false,
             center: None,
             zoom: 1.0,
         };
@@ -125,14 +142,18 @@ impl Editor {
         ed
     }
 
+    /// A fresh level with a random name. It's unsaved (`saved` is empty),
+    /// so the first autosave puts it in My levels straight away.
     pub fn new_level(me: &str) -> Self {
         let level = Level {
-            name: "My level".to_owned(),
+            name: random_name(),
             author: me.to_owned(),
             pigs: DEFAULT_PIGS.to_vec(),
             ..Level::default()
         };
-        Self::open(level, None, me)
+        let mut ed = Self::open(level, None, me);
+        ed.saved.clear();
+        ed
     }
 
     /// Dev aid for screenshots: preselect a piece and a palette category.
@@ -148,10 +169,6 @@ impl Editor {
 
     fn code(&self) -> String {
         share::encode(&self.level)
-    }
-
-    fn dirty(&self) -> bool {
-        self.saved.as_deref() != Some(self.code().as_str())
     }
 
     /// Call before changing the level, so the change can be undone.
@@ -547,6 +564,7 @@ impl App {
         match self.edit_frame(&mut ed, input, view) {
             EditNav::Stay => self.editor = Some(ed),
             EditNav::Leave => {
+                platform::save(super::EDITING_KEY, "");
                 self.screen = Screen::Menu;
                 self.tab = super::menu::Tab::Mine;
             }
@@ -622,7 +640,7 @@ impl App {
         if wheel.abs() > 0.0 && !layout.over_ui(input.pos) {
             ed.zoom_by(if wheel > 0.0 { 1.1 } else { 1.0 / 1.1 });
         }
-        let mut nav = self.top_bar(ed, ui_input, &layout);
+        let nav = self.top_bar(ed, ui_input, &layout);
         self.palette_bar(ed, ui_input, &layout);
         if let Some(rect) = layout.tools {
             Self::tool_bar(ed, ui_input, rect);
@@ -641,11 +659,32 @@ impl App {
                 WHITE,
             );
         }
-        if nav == EditNav::Leave && ed.dirty() && !ed.confirm_leave {
-            ed.confirm_leave = true;
-            nav = EditNav::Stay;
-        }
+        self.autosave(ed);
         nav
+    }
+
+    /// Saves the level (and its undo history) whenever it has changed, so
+    /// nothing is lost if the app is closed. Mid-drag changes wait for the drop.
+    pub(super) fn autosave(&mut self, ed: &mut Editor) {
+        if ed.drag.is_some() {
+            return;
+        }
+        let code = ed.code();
+        if code == ed.saved {
+            return;
+        }
+        let id = match &ed.id {
+            Some(id) => self.bank.update(id, &ed.level),
+            None => self
+                .bank
+                .add(&ed.level, Shelf::Mine)
+                .or_else(|| self.bank.mine_with_code(&code))
+                .unwrap_or_default(),
+        };
+        bank::save_history(&id, &ed.undo);
+        platform::save(super::EDITING_KEY, &id);
+        ed.id = Some(id);
+        ed.saved = code;
     }
 
     /// Dragging pieces and the launcher around the scene, and panning.
@@ -674,7 +713,6 @@ impl App {
             let hit = (0..ed.level.pieces.len())
                 .rev()
                 .find(|&i| contains(&ed.level.pieces[i], w, margin));
-            ed.confirm_leave = false;
             if let Some(i) = hit {
                 let c = V2::new(ed.level.pieces[i].x, ed.level.pieces[i].y);
                 ed.selection = Some(Selection::Piece(i));
@@ -823,18 +861,8 @@ impl App {
             Color::new(0.0, 0.0, 0.0, 0.18),
         );
 
-        let back_label = if ed.confirm_leave { "Discard?" } else { "Back" };
         let mut nav = EditNav::Stay;
-        if button(
-            next(bs * 2.2),
-            back_label,
-            input,
-            if ed.confirm_leave {
-                rgb(200, 77, 69)
-            } else {
-                SLATE
-            },
-        ) {
+        if button(next(bs * 2.2), "Back", input, SLATE) {
             nav = EditNav::Leave;
         }
         let undo_color = if ed.undo.is_empty() {
@@ -864,7 +892,8 @@ impl App {
 
         let left_end = x;
 
-        // Right side: Test, Save, Save copy, Share (laid out right to left).
+        // Right side: Test, Save copy, Share (laid out right to left). There's
+        // no Save: every change is saved as it's made.
         let mut rx = sw - u * 0.02;
         let mut prev = |w: f32| {
             rx -= w;
@@ -873,8 +902,7 @@ impl App {
             r
         };
         let share_r = prev(bs);
-        let copy_r = ed.origin.is_some().then(|| prev(bs * 3.4));
-        let save_r = prev(bs * 2.2);
+        let copy_r = ed.id.is_some().then(|| prev(bs * 3.4));
         let test_r = prev(bs * 2.2);
         let right_start = rx;
 
@@ -890,7 +918,6 @@ impl App {
         } else {
             &ed.level.name
         };
-        let star = if ed.dirty() { " *" } else { "" };
         draw_rectangle(
             name_r.x,
             name_r.y,
@@ -898,9 +925,8 @@ impl App {
             name_r.h,
             Color::new(1.0, 1.0, 1.0, 0.15),
         );
-        let name_text = format!("{name}{star}");
         render::text_centered(
-            &name_text,
+            name,
             name_r.center().x,
             name_r.y + name_r.h * 0.78,
             u * 0.04,
@@ -943,35 +969,16 @@ impl App {
         if let Some(copy_r) = copy_r
             && button(copy_r, "Save copy", input, SLATE)
         {
-            let code = share::encode(&ed.level);
-            self.bank.add(&ed.level, Shelf::Mine);
-            ed.origin = Some(code.clone());
-            ed.saved = Some(code);
-            self.toast("Saved as a copy in My levels");
-        }
-        let save_color = if ed.dirty() {
-            super::GREEN
-        } else {
-            Color::new(0.4, 0.55, 0.4, 1.0)
-        };
-        if button(save_r, "Save", input, save_color) {
-            let code = if let Some(old) = &ed.origin {
-                self.bank.replace(old, &ed.level)
-            } else {
-                self.bank.add(&ed.level, Shelf::Mine);
-                share::encode(&ed.level)
-            };
-            ed.origin = Some(code.clone());
-            ed.saved = Some(code);
-            if ed.level.author.is_empty() {
-                self.toast("Saved! Tap 'by ...' to put your name on it");
-            } else {
-                self.toast("Saved to My levels");
-            }
+            // Branch off: the current version stays as it is, and editing
+            // carries on in a copy (with the same undo history).
+            ed.level.name = format!("{} (copy)", ed.level.name);
+            ed.id = None;
+            ed.saved.clear();
+            self.autosave(ed);
+            self.toast("Copied - you're now editing the copy");
         }
         if button(test_r, "Test", input, ORANGE) {
             ed.selection = None;
-            ed.confirm_leave = false;
             nav = EditNav::Test;
         }
         nav

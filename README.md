@@ -45,8 +45,13 @@ to remix it (remixes credit the original author).
   couple of seconds of physics after each change).
 - **Undo / Redo** step through previous versions of the level (each is a level code).
 - **Test** plays it; the in-game menu button comes back to the editor.
-- **Save** overwrites your level, **Save copy** keeps both. Tap the name or the
-  "by …" line to rename the level or set your name (remembered on the device).
+- **Everything saves automatically.** A new level gets a random name and goes
+  straight into My levels; a remix is added on its first change. If the app is
+  closed mid-edit, it reopens right where you left off. **Save copy** branches off
+  a copy to keep editing, leaving the current version as it is.
+- Undo history (the last 50 versions) is kept on the device, so Undo still works
+  after the app is closed. Tap the name or the "by …" line to rename the level or
+  set your name (remembered on the device).
 - **Paste link** (From friends tab) imports a level from a copied link; handy in the
   installed iPhone app, where links open in Safari instead.
 

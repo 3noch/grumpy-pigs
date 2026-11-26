@@ -340,12 +340,18 @@ fn menu_corner_controls(input: &Input, mirrored: bool) -> bool {
     toggled
 }
 
+/// Storage key remembering which level was open in the editor, so the app
+/// can reopen it after being closed.
+const EDITING_KEY: &str = "editing";
+
 const GREEN: Color = Color::new(0.35, 0.68, 0.3, 1.0);
 const ORANGE: Color = Color::new(0.93, 0.55, 0.2, 1.0);
 const SLATE: Color = Color::new(0.35, 0.38, 0.48, 1.0);
 
 impl App {
     fn new() -> Self {
+        // Seed randomness (level names, ids) differently on every launch.
+        macroquad::rand::srand(macroquad::miniquad::date::now().to_bits());
         let levels = levels::all();
         App {
             best_stars: vec![0; levels.len()],
@@ -400,16 +406,40 @@ impl App {
         });
     }
 
-    /// Opens the editor on `level`: my saved level if it's on my shelf,
-    /// otherwise a remix.
-    fn edit_level(&mut self, level: Level) {
-        let code = share::encode(&level);
-        let mine = self
-            .bank
-            .on_shelf(bank::Shelf::Mine)
-            .any(|e| e.code == code);
-        let ed = editor::Editor::open(level, mine.then_some(code), &self.me);
+    /// Opens the editor on `level`: my saved level (`id`, or found by its
+    /// content), otherwise a remix.
+    fn edit_level(&mut self, level: Level, id: Option<String>) {
+        let id = id.or_else(|| self.bank.mine_with_code(&share::encode(&level)));
+        if let Some(id) = &id {
+            platform::save(EDITING_KEY, id);
+        }
+        let ed = editor::Editor::open(level, id, &self.me);
         self.open_editor(ed);
+    }
+
+    /// Starts a new level, saved in My levels straight away.
+    fn new_level(&mut self) {
+        let mut ed = editor::Editor::new_level(&self.me);
+        self.autosave(&mut ed);
+        self.open_editor(ed);
+    }
+
+    /// Reopens the level that was being edited when the app was last closed.
+    fn resume_editing(&mut self) {
+        let id = platform::load(EDITING_KEY).unwrap_or_default();
+        let id = id.trim();
+        if id.is_empty() {
+            return;
+        }
+        let level = match self.bank.get(id) {
+            Some(bank::Entry {
+                place: bank::Shelf::Mine,
+                level: Ok(level),
+                ..
+            }) => level.clone(),
+            _ => return,
+        };
+        self.edit_level(level, Some(id.to_owned()));
     }
 
     /// The desktop text box, drawn over everything. Returns true while open.
@@ -609,7 +639,7 @@ impl App {
             Nav::Stay => {}
             Nav::Menu | Nav::Edit if src == Source::Editor => self.screen = Screen::Edit,
             Nav::Menu => self.screen = Screen::Menu,
-            Nav::Edit => self.edit_level(level_copy),
+            Nav::Edit => self.edit_level(level_copy, None),
             Nav::Restart => self.begin(src, level_copy),
             Nav::Next => {
                 if let Source::Builtin(i) = src {
@@ -618,7 +648,7 @@ impl App {
             }
             Nav::Mirror => self.toggle_mirror(),
             Nav::Save => {
-                if self.bank.add(&level_copy, bank::Shelf::Friends) {
+                if self.bank.add(&level_copy, bank::Shelf::Friends).is_some() {
                     self.toast("Saved to From friends");
                 }
             }
@@ -1214,16 +1244,16 @@ fn apply_dev_env(app: &mut App) {
     // `GRUMPY_EDIT=n` opens level n in the editor (0 = a new level), with
     // `GRUMPY_EDIT_SELECT=i` and `GRUMPY_EDIT_CAT=earth|blocks|wolves|pigs`.
     if let Some(n) = env_parse::<usize>("GRUMPY_EDIT") {
-        let mut ed = match n {
-            0 => editor::Editor::new_level(&app.me),
-            n => {
-                let level = app.levels[(n - 1).min(app.levels.len() - 1)].clone();
-                editor::Editor::open(level, None, "Elliot")
-            }
-        };
+        if n == 0 {
+            app.new_level();
+        } else {
+            let level = app.levels[(n - 1).min(app.levels.len() - 1)].clone();
+            app.open_editor(editor::Editor::open(level, None, "Elliot"));
+        }
         let category = std::env::var("GRUMPY_EDIT_CAT").ok();
-        ed.dev_setup(env_parse("GRUMPY_EDIT_SELECT"), category.as_deref());
-        app.open_editor(ed);
+        if let Some(ed) = app.editor.as_mut() {
+            ed.dev_setup(env_parse("GRUMPY_EDIT_SELECT"), category.as_deref());
+        }
     }
 }
 
@@ -1309,6 +1339,7 @@ async fn main() {
         return;
     }
     let mut app = App::new();
+    app.resume_editing();
     let shot = shot_from_env();
     apply_dev_env(&mut app);
     let mut script = InputScript::from_env();

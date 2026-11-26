@@ -31,10 +31,12 @@ enum Action {
     None,
     PlayBuiltin(usize),
     Play(Level),
-    Edit(Level),
+    /// Open in the editor: my saved level (with its id) or a remix (`None`).
+    Edit(Level, Option<String>),
     NewLevel,
     Save(Level),
-    Delete(String, Shelf),
+    /// Delete a bank entry, by id.
+    Delete(String),
 }
 
 const RED: Color = Color::new(0.78, 0.3, 0.27, 1.0);
@@ -154,18 +156,15 @@ impl App {
             Action::None => {}
             Action::PlayBuiltin(i) => self.start(i),
             Action::Play(level) => self.start_custom(level),
-            Action::Edit(level) => self.edit_level(level),
-            Action::NewLevel => {
-                let ed = crate::editor::Editor::new_level(&self.me);
-                self.open_editor(ed);
-            }
+            Action::Edit(level, id) => self.edit_level(level, id),
+            Action::NewLevel => self.new_level(),
             Action::Save(level) => {
-                if self.bank.add(&level, Shelf::Friends) {
+                if self.bank.add(&level, Shelf::Friends).is_some() {
                     self.toast("Saved to From friends");
                 }
             }
-            Action::Delete(code, place) => {
-                self.bank.remove(&code, place);
+            Action::Delete(id) => {
+                self.bank.remove(&id);
                 self.confirm_delete = None;
                 self.toast("Deleted");
             }
@@ -310,10 +309,10 @@ impl App {
     fn bank_cards(&mut self, place: Shelf, input: &Input) -> Action {
         let (sw, sh) = (screen_width(), screen_height());
         let u = ui_unit();
-        let entries: Vec<(String, Result<Level, DecodeError>)> = self
+        let entries: Vec<(String, String, Result<Level, DecodeError>)> = self
             .bank
             .on_shelf(place)
-            .map(|e| (e.code.clone(), e.level.clone()))
+            .map(|e| (e.id.clone(), e.code.clone(), e.level.clone()))
             .collect();
 
         if entries.is_empty() {
@@ -344,7 +343,7 @@ impl App {
         let y0 = sh * 0.36;
         let mut action = Action::None;
 
-        for (slot, (code, level)) in entries
+        for (slot, (id, code, level)) in entries
             .iter()
             .skip(self.page * per_page)
             .take(per_page)
@@ -424,15 +423,15 @@ impl App {
             // Buttons along the bottom of the card.
             let bh = ch * 0.28;
             let by = card.bottom() - pad - bh;
-            let confirming = self.confirm_delete.as_deref() == Some(code.as_str());
+            let confirming = self.confirm_delete.as_deref() == Some(id.as_str());
             let del = Rect::new(card.right() - pad - bh, by, bh, bh);
             if confirming {
                 let sure = Rect::new(card.right() - pad - bh * 3.2, by, bh * 3.2, bh);
                 if button(sure, "Delete?", input, RED) {
-                    action = Action::Delete(code.clone(), place);
+                    action = Action::Delete(id.clone());
                 }
             } else if icon_button(del, Icon::Trash, input, RED) {
-                self.confirm_delete = Some(code.clone());
+                self.confirm_delete = Some(id.clone());
             }
             if let Ok(level) = level {
                 let play = Rect::new(card.x + pad, by, bh * 2.6, bh);
@@ -443,7 +442,8 @@ impl App {
                 share_button(share_r, level, input);
                 let edit_r = Rect::new(share_r.right() + pad * 0.6, by, bh, bh);
                 if icon_button(edit_r, Icon::Pencil, input, SLATE) {
-                    action = Action::Edit(level.clone());
+                    let mine = (place == Shelf::Mine).then(|| id.clone());
+                    action = Action::Edit(level.clone(), mine);
                 }
             }
         }
