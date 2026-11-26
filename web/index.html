@@ -7,6 +7,9 @@
   <meta name="description" content="Fling furious pigs from a slingshot to topple the smug wolves' straw, stick and brick hideouts.">
   <meta name="theme-color" content="#6eb4eb">
 
+  <!-- This page is the loader: build-web.sh swaps each file-name placeholder for
+       a content-hashed file name, so those files can be cached forever. -->
+
   <!-- Installable app (PWA) -->
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
@@ -43,8 +46,8 @@
 <body>
   <canvas id="glcanvas" tabindex="1"></canvas>
   <div id="status">Loading Grumpy Pigs…</div>
-  <script src="mq_js_bundle.js"></script>
-  <script src="platform.js"></script>
+  <script src="__mq_js_bundle.js__"></script>
+  <script src="__platform.js__"></script>
   <script>
     (function () {
       var status = document.getElementById("status");
@@ -65,7 +68,7 @@
       }
       window.addEventListener("error", function (e) { fail(e.message); });
       window.addEventListener("unhandledrejection", function (e) { fail(e.reason && e.reason.message || String(e.reason)); });
-      load("grumpy-pigs.wasm");
+      load("__grumpy-pigs.wasm__");
     })();
   </script>
 </body>

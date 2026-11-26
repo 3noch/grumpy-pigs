@@ -57,7 +57,11 @@ The web build is an installable Progressive Web App that works offline after the
 
 Browsers only allow fullscreen and the install prompt from a real tap, so the game
 registers its button areas with `web/platform.js`, which acts on the tap itself.
-`web/sw.js` caches the game for offline play (network first, so updates arrive immediately).
+Caching: `build-web.sh` renames the heavy files after a hash of their contents
+(`grumpy-pigs.<hash>.wasm`, ...), and `index.html` is a ~3 KB loader that names them.
+The service worker (`web/sw.js`) serves fingerprinted files straight from its cache
+forever and checks only the loader with the server on each launch, so a deploy shows
+up on the next launch, downloads only the files that changed, and the game works offline.
 Icons are rendered by the game: `./make-icons.sh` regenerates `web/icons/` (macOS).
 
 ## Publish to GitHub Pages

@@ -132,7 +132,10 @@
   if ("serviceWorker" in navigator && secure) {
     window.addEventListener("load", function () {
       try {
-        navigator.serviceWorker.register("sw.js").catch(function () {});
+        navigator.serviceWorker
+          .register("sw.js", { updateViaCache: "none" })
+          .then(function (reg) { reg.update().catch(function () {}); })
+          .catch(function () {});
       } catch (e) { /* unavailable */ }
     });
   }
