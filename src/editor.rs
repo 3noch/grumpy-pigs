@@ -19,8 +19,8 @@ use crate::platform::{self, Ask};
 use crate::render::{self, View};
 use crate::share;
 use crate::sim::{
-    Ent, FAIRY_RADIUS, Game, Kind, Level, Material, Piece, PieceKind, PigKind, Shape, Size, V2,
-    WolfKind,
+    Ent, FAIRY_RADIUS, Game, Kind, Level, Material, PORTAL_RADIUS, Piece, PieceKind, PigKind,
+    Portal, PortalEnd, PortalLink, Shape, Size, V2, WolfKind,
 };
 
 /// Positions snap to this grid (meters).
@@ -36,13 +36,15 @@ pub enum Category {
     Blocks,
     Wolves,
     Pigs,
-    /// Fairies (and, one day, portals and other magic).
+    /// Fairies and portals.
     Magic,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Selection {
     Piece(usize),
+    /// The far end of the portal pair that is piece `n`.
+    Exit(usize),
     Launcher,
 }
 
@@ -53,6 +55,8 @@ enum Drag {
     /// `from` where the finger went down (on screen).
     Move {
         idx: usize,
+        /// Moving a portal's far end rather than the piece itself.
+        exit: bool,
         grab: V2,
         from: Vec2,
         moved: bool,
@@ -95,6 +99,8 @@ pub struct Editor {
     /// (1 = the play area's full width).
     center: Option<V2>,
     zoom: f32,
+    /// The color the next portal pair gets (unlike any already placed).
+    next_hue: u16,
 }
 
 const DEFAULT_PIGS: [PigKind; 3] = [PigKind::Grunt, PigKind::Grunt, PigKind::Grunt];
@@ -143,6 +149,7 @@ impl Editor {
             saved,
             center: None,
             zoom: 1.0,
+            next_hue: 0,
         };
         ed.rebuild(true);
         ed
@@ -189,6 +196,7 @@ impl Editor {
 
     fn rebuild(&mut self, check_wobble: bool) {
         self.preview = Game::new(&self.level);
+        self.next_hue = fresh_hue(&self.level);
         if check_wobble {
             self.wobbly = wobbly_pieces(&self.level);
         }
@@ -211,7 +219,9 @@ impl Editor {
 
     fn selected_piece(&self) -> Option<usize> {
         match self.selection {
-            Some(Selection::Piece(i)) if i < self.level.pieces.len() => Some(i),
+            Some(Selection::Piece(i) | Selection::Exit(i)) if i < self.level.pieces.len() => {
+                Some(i)
+            }
             _ => None,
         }
     }
@@ -222,7 +232,8 @@ impl Editor {
             return;
         };
         self.checkpoint();
-        f(&mut self.level.pieces[i]);
+        let exit = self.selection == Some(Selection::Exit(i));
+        with_end(&mut self.level.pieces[i], exit, f);
         if self.snap {
             let p = self.level.pieces[i];
             self.level.pieces[i].y = drop_y(&self.level, &p, Some(i));
@@ -231,12 +242,90 @@ impl Editor {
     }
 }
 
+// --- Portals ---
+
+/// A stand-in piece for the far end of a portal pair, so it can be hit-tested,
+/// outlined and edited like any other piece.
+fn exit_of(p: &Piece) -> Option<Piece> {
+    let PieceKind::Portal(link) = p.kind else {
+        return None;
+    };
+    Some(Piece {
+        x: link.x,
+        y: link.y,
+        angle: link.angle,
+        ..*p
+    })
+}
+
+/// Applies `f` to one end of a piece: the piece itself, or (with `exit`) a
+/// portal's far end. Both ends share one size.
+fn with_end(p: &mut Piece, exit: bool, f: impl FnOnce(&mut Piece)) {
+    let Some(mut end) = exit.then(|| exit_of(p)).flatten() else {
+        f(p);
+        return;
+    };
+    f(&mut end);
+    p.size = end.size;
+    if let PieceKind::Portal(link) = &mut p.kind {
+        link.x = end.x;
+        link.y = end.y;
+        link.angle = end.angle;
+    }
+}
+
+/// Moves a portal's far end along with the piece (for dragging out new ones).
+fn shift_exit(p: &mut Piece, d: V2) {
+    if let PieceKind::Portal(link) = &mut p.kind {
+        link.x += d.x;
+        link.y += d.y;
+    }
+}
+
+/// A color for a new portal pair: as far round the color wheel as possible
+/// from every pair already placed (any color at all, for the first).
+fn fresh_hue(level: &Level) -> u16 {
+    let used: Vec<u16> = level
+        .pieces
+        .iter()
+        .filter_map(|p| match p.kind {
+            PieceKind::Portal(link) => Some(link.hue),
+            _ => None,
+        })
+        .collect();
+    let gap = |h: u16| {
+        used.iter()
+            .map(|&u| {
+                let d = h.abs_diff(u) % 360;
+                d.min(360 - d)
+            })
+            .min()
+            .unwrap_or(180)
+    };
+    let start = macroquad::rand::gen_range(0u16, 24);
+    (0..24u16)
+        .map(|i| (start + i) % 24 * 15)
+        .max_by_key(|&h| gap(h))
+        .unwrap_or(0)
+}
+
 // --- Geometry ---
+
+/// The shape a piece takes up: portals are a tall oval, not a ball.
+fn footprint(p: &Piece) -> Size {
+    match p.kind {
+        PieceKind::Portal(_) => {
+            let r = p.size.radius();
+            Size::Box { w: r, h: r * 2.0 }
+        }
+        _ => p.size,
+    }
+}
 
 /// A piece's outline polygon in world space (circles approximated).
 fn outline(p: &Piece) -> Vec<V2> {
     let c = V2::new(p.x, p.y);
-    match p.size {
+    match footprint(p) {
         Size::Box { w, h } => {
             let (s, co) = p.angle.sin_cos();
             [(-w, -h), (w, -h), (w, h), (-w, h)]
@@ -281,8 +370,8 @@ fn bounds(poly: &[V2]) -> (V2, V2) {
 /// The height `p` would come to rest at if dropped straight down onto the
 /// ground or whatever is beneath it (pieces whose surface is below its center).
 fn drop_y(level: &Level, p: &Piece, exclude: Option<usize>) -> f32 {
-    if p.kind == PieceKind::Fairy {
-        // Fairies hover right where they're put.
+    if matches!(p.kind, PieceKind::Fairy | PieceKind::Portal(_)) {
+        // Fairies and portals hover right where they're put.
         return p.y;
     }
     let at_zero = Piece { y: 0.0, ..*p };
@@ -292,7 +381,7 @@ fn drop_y(level: &Level, p: &Piece, exclude: Option<usize>) -> f32 {
         .pieces
         .iter()
         .enumerate()
-        .filter(|&(i, _)| Some(i) != exclude)
+        .filter(|&(i, o)| Some(i) != exclude && !matches!(o.kind, PieceKind::Portal(_)))
         .map(|(_, o)| outline(o))
         .collect();
     let mut rest = f32::NEG_INFINITY;
@@ -316,6 +405,7 @@ fn launcher_drop(level: &Level, x: f32, y: f32) -> f32 {
     level
         .pieces
         .iter()
+        .filter(|o| !matches!(o.kind, PieceKind::Portal(_)))
         .filter_map(|o| vertical_span(&outline(o), x).map(|(_, top)| top))
         .filter(|&top| top <= y + 0.6)
         .fold(0.0_f32, f32::max)
@@ -323,7 +413,7 @@ fn launcher_drop(level: &Level, x: f32, y: f32) -> f32 {
 
 fn contains(p: &Piece, w: V2, margin: f32) -> bool {
     let d = w - V2::new(p.x, p.y);
-    match p.size {
+    match footprint(p) {
         Size::Box { w, h } => {
             let (s, c) = (-p.angle).sin_cos();
             let local = V2::new(d.x * c - d.y * s, d.x * s + d.y * c);
@@ -377,6 +467,11 @@ pub fn draw_piece(view: &View, p: &Piece, time: f32, seed: u32) {
             let anim = Anim::new(time, seed, Mood::Idle, V2::new(-1.0, 0.0));
             art::fairy(view, pos, p.size.radius(), &anim, false);
         }
+        PieceKind::Portal(_) => {
+            if let Some(portal) = Portal::from_piece(p) {
+                art::portal(view, &portal, time);
+            }
+        }
         kind => {
             let kind = match kind {
                 PieceKind::Terrain => Kind::Rock,
@@ -386,6 +481,36 @@ pub fn draw_piece(view: &View, p: &Piece, time: f32, seed: u32) {
             render::block(view, &Ent::preview(kind, shape, pos, p.angle, seed));
         }
     }
+}
+
+/// A piece's picture on a palette button: just one end, for a portal.
+fn draw_thumb(rect: Rect, p: &Piece, time: f32, seed: u32) {
+    let view = thumb_view(rect, p);
+    if let PieceKind::Portal(link) = p.kind {
+        let end = PortalEnd {
+            pos: V2::new(p.x, p.y),
+            angle: p.angle,
+        };
+        art::portal_end(&view, end, p.size.radius(), link.hue, time);
+    } else {
+        draw_piece(&view, p, time, seed);
+    }
+}
+
+/// A new portal pair as it comes out of the palette: two upright ends side
+/// by side, in the color it will get.
+fn new_portal(hue: u16) -> Piece {
+    let link = PortalLink {
+        x: 3.5,
+        y: 0.0,
+        angle: 0.0,
+        hue,
+    };
+    piece(
+        PieceKind::Portal(link),
+        Size::Ball { r: PORTAL_RADIUS },
+        0.0,
+    )
 }
 
 /// A button with a little picture and a word: side by side on wide buttons,
@@ -460,7 +585,7 @@ fn category_picture(cat: Category, pic: Rect, time: f32) {
             return;
         }
     };
-    draw_piece(&thumb_view(pic, &p), &p, time, 2);
+    draw_thumb(pic, &p, time, 2);
 }
 
 /// A view that fits a piece (centered at the origin) inside `rect`.
@@ -473,6 +598,21 @@ fn thumb_view(rect: Rect, p: &Piece) -> View {
         ox: rect.center().x,
         oy: rect.center().y,
         mirror: None,
+    }
+}
+
+/// A dotted line, in the pair's color, joining a portal's two ends.
+fn pair_line(view: &View, p: &Piece) {
+    let (Some(far), PieceKind::Portal(link)) = (exit_of(p), p.kind) else {
+        return;
+    };
+    let (a, b) = (view.v(V2::new(p.x, p.y)), view.v(V2::new(far.x, far.y)));
+    let col = crate::gfx::alpha(crate::gfx::hsv(f32::from(link.hue), 0.6, 1.0), 0.8);
+    let n = crate::gfx::count(a.distance(b) / 14.0, 1000).max(1);
+    for k in (0..n).step_by(2) {
+        let (t0, t1) = (k as f32 / n as f32, (k + 1) as f32 / n as f32);
+        let (q0, q1) = (a.lerp(b, t0), a.lerp(b, t1));
+        draw_line(q0.x, q0.y, q1.x, q1.y, 3.0, col);
     }
 }
 
@@ -494,7 +634,7 @@ fn piece(kind: PieceKind, size: Size, angle: f32) -> Piece {
     }
 }
 
-fn palette(cat: Category, mat: Material) -> Vec<Piece> {
+fn palette(cat: Category, mat: Material, hue: u16) -> Vec<Piece> {
     let b = |w: f32, h: f32| Size::Box { w, h };
     let ball = |r: f32| Size::Ball { r };
     let block = PieceKind::Block(mat);
@@ -526,7 +666,10 @@ fn palette(cat: Category, mat: Material) -> Vec<Piece> {
         .into_iter()
         .map(|w| piece(PieceKind::Wolf(w), ball(w.radius()), 0.0))
         .collect(),
-        Category::Magic => vec![piece(PieceKind::Fairy, ball(FAIRY_RADIUS), 0.0)],
+        Category::Magic => vec![
+            piece(PieceKind::Fairy, ball(FAIRY_RADIUS), 0.0),
+            new_portal(hue),
+        ],
         Category::Pigs => Vec::new(),
     }
 }
@@ -695,9 +838,17 @@ impl App {
             }
         }
         match ed.selection {
-            Some(Selection::Piece(i)) => {
+            Some(sel @ (Selection::Piece(i) | Selection::Exit(i))) => {
                 if let Some(p) = ed.level.pieces.get(i) {
-                    outline_screen(view, p, rgb(255, 220, 60), 4.0);
+                    pair_line(view, p);
+                    let end = if sel == Selection::Exit(i) {
+                        exit_of(p)
+                    } else {
+                        Some(*p)
+                    };
+                    if let Some(end) = end {
+                        outline_screen(view, &end, rgb(255, 220, 60), 4.0);
+                    }
                 }
             }
             Some(Selection::Launcher) => {
@@ -801,14 +952,25 @@ impl App {
                     && w.y > base.y - margin
                     && w.y < base.y + crate::sim::SLING_HEIGHT + 0.5 + margin
             };
-            let hit = (0..ed.level.pieces.len())
-                .rev()
-                .find(|&i| contains(&ed.level.pieces[i], w, margin));
-            if let Some(i) = hit {
-                let c = V2::new(ed.level.pieces[i].x, ed.level.pieces[i].y);
-                ed.selection = Some(Selection::Piece(i));
+            let hit = (0..ed.level.pieces.len()).rev().find_map(|i| {
+                let p = &ed.level.pieces[i];
+                if contains(p, w, margin) {
+                    Some((i, false, V2::new(p.x, p.y)))
+                } else {
+                    exit_of(p)
+                        .filter(|far| contains(far, w, margin))
+                        .map(|far| (i, true, V2::new(far.x, far.y)))
+                }
+            });
+            if let Some((i, exit, c)) = hit {
+                ed.selection = Some(if exit {
+                    Selection::Exit(i)
+                } else {
+                    Selection::Piece(i)
+                });
                 ed.drag = Some(Drag::Move {
                     idx: i,
+                    exit,
                     grab: w - c,
                     from: p,
                     moved: false,
@@ -841,16 +1003,18 @@ impl App {
             let w = world(cur);
             match &mut ed.drag {
                 Some(Drag::New(p)) => {
-                    p.x = snap(w.x);
-                    p.y = snap(w.y);
+                    let to = V2::new(snap(w.x), snap(w.y));
+                    shift_exit(p, to - V2::new(p.x, p.y));
+                    (p.x, p.y) = (to.x, to.y);
                 }
                 Some(Drag::Move {
                     idx,
+                    exit,
                     grab,
                     from,
                     moved,
                 }) => {
-                    let (idx, grab) = (*idx, *grab);
+                    let (idx, exit, grab) = (*idx, *exit, *grab);
                     if !*moved {
                         if cur.distance(*from) < DRAG_SLOP {
                             return;
@@ -859,8 +1023,10 @@ impl App {
                         ed.checkpoint();
                     }
                     if let Some(p) = ed.level.pieces.get_mut(idx) {
-                        p.x = snap(w.x - grab.x);
-                        p.y = snap(w.y - grab.y);
+                        with_end(p, exit, |p| {
+                            p.x = snap(w.x - grab.x);
+                            p.y = snap(w.y - grab.y);
+                        });
                     }
                     ed.rebuild(false);
                 }
@@ -902,7 +1068,13 @@ impl App {
                             p.y = drop_y(&ed.level, &p, None);
                         }
                         ed.level.pieces.push(p);
-                        ed.selection = Some(Selection::Piece(ed.level.pieces.len() - 1));
+                        let i = ed.level.pieces.len() - 1;
+                        // A new portal pair: the far end is the one to move next.
+                        ed.selection = Some(if exit_of(&p).is_some() {
+                            Selection::Exit(i)
+                        } else {
+                            Selection::Piece(i)
+                        });
                         ed.rebuild(true);
                     }
                 }
@@ -1150,13 +1322,13 @@ impl App {
         }
 
         // Pieces: press to drag one out.
-        let items = palette(ed.category, ed.material);
+        let items = palette(ed.category, ed.material, ed.next_hue);
         let ih = r.bottom() - pad - items_y;
         let iw = ih.min((r.w - x0 - pad) / items.len().max(1) as f32 - pad);
         for (i, p) in items.iter().enumerate() {
             let ir = Rect::new(x0 + i as f32 * (iw + pad), items_y, iw, ih);
             draw_rectangle(ir.x, ir.y, ir.w, ir.h, Color::new(1.0, 1.0, 1.0, 0.12));
-            draw_piece(&thumb_view(ir, p), p, self.time, 3);
+            draw_thumb(ir, p, self.time, 3);
             if input.pressed.is_some_and(|q| ir.contains(q)) {
                 ed.selection = None;
                 ed.drag = Some(Drag::New(*p));
@@ -1331,6 +1503,11 @@ impl App {
             ed.checkpoint();
             let mut p = ed.level.pieces[i];
             p.x += 1.0;
+            shift_exit(&mut p, V2::X);
+            // A copied portal pair is a new pair, in a color of its own.
+            if let PieceKind::Portal(link) = &mut p.kind {
+                link.hue = ed.next_hue;
+            }
             if ed.snap {
                 p.y = drop_y(&ed.level, &p, None);
             }
@@ -1425,6 +1602,49 @@ mod tests {
         for lvl in levels::all() {
             assert!(wobbly_pieces(&lvl).is_empty(), "{}", lvl.name);
         }
+    }
+
+    #[test]
+    fn new_portal_colors_stay_apart() {
+        let mut level = Level::default();
+        for _ in 0..4 {
+            let mut p = new_portal(fresh_hue(&level));
+            p.x = 10.0 * level.pieces.len() as f32;
+            level.pieces.push(p);
+        }
+        let hues: Vec<u16> = level
+            .pieces
+            .iter()
+            .filter_map(|p| match p.kind {
+                PieceKind::Portal(l) => Some(l.hue),
+                _ => None,
+            })
+            .collect();
+        for (i, a) in hues.iter().enumerate() {
+            for b in &hues[i + 1..] {
+                let d = a.abs_diff(*b) % 360;
+                assert!(d.min(360 - d) >= 90, "{hues:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn editing_a_portals_far_end_leaves_the_near_end() {
+        let mut p = new_portal(40);
+        with_end(&mut p, true, |end| {
+            end.x = 9.0;
+            end.angle = 1.0;
+            end.size = Size::Ball { r: 1.5 };
+        });
+        assert_eq!((p.x, p.angle), (0.0, 0.0));
+        let PieceKind::Portal(link) = p.kind else {
+            panic!()
+        };
+        assert_eq!((link.x, link.angle), (9.0, 1.0));
+        // One size for both ends.
+        assert_eq!(p.size, Size::Ball { r: 1.5 });
+        assert!(contains(&p, V2::new(0.0, 1.2), 0.0));
+        assert!(contains(&exit_of(&p).unwrap(), V2::new(9.0, 0.0), 0.0));
     }
 
     #[test]

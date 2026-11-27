@@ -48,7 +48,9 @@ to remix it (remixes credit the original author).
 - **Earth / Blocks / Wolves / Pigs / Magic** palette along the bottom: drag a piece out and
   it drops onto whatever is below it (turn **Snap** off to place pieces freely).
   Blocks come in straw, wood, brick and ice, plus TNT and boulders. Magic has fairies,
-  which stay exactly where you put them (great for floating platforms).
+  which stay exactly where you put them (great for floating platforms), and portals:
+  dragging one out places both ends of a pair, each pair in a color unlike the others.
+  Move and turn each end on its own; deleting either end deletes the pair.
 - Every button has a picture as well as a word, so kids who can't read yet can build too.
 - Tap a piece to select it: rotate in 10° steps, resize, copy, delete; tapping a
   material restyles the selected block. Drag the slingshot to move it, even onto a ledge.
