@@ -159,16 +159,28 @@ fn button_bg(rect: Rect, accent: Color) {
     } else {
         accent
     };
-    let r = rect.h * 0.25;
-    draw_rectangle(rect.x + r, rect.y, rect.w - 2.0 * r, rect.h, col);
-    draw_rectangle(rect.x, rect.y + r, rect.w, rect.h - 2.0 * r, col);
-    for (cx, cy) in [
-        (rect.x + r, rect.y + r),
-        (rect.right() - r, rect.y + r),
-        (rect.x + r, rect.bottom() - r),
-        (rect.right() - r, rect.bottom() - r),
-    ] {
-        draw_circle(cx, cy, r, col);
+    rounded_rect(rect, rect.h * 0.25, col);
+}
+
+/// A filled rectangle with round corners, drawn as one shape so a
+/// see-through color stays even (no darker overlaps).
+fn rounded_rect(rect: Rect, r: f32, col: Color) {
+    let c = rect.center();
+    let corners = [
+        (rect.right() - r, rect.bottom() - r, 0.0),
+        (rect.x + r, rect.bottom() - r, 0.25),
+        (rect.x + r, rect.y + r, 0.5),
+        (rect.right() - r, rect.y + r, 0.75),
+    ];
+    let mut ring = Vec::with_capacity(4 * 7);
+    for (cx, cy, start) in corners {
+        for k in 0..=6 {
+            let a = (start + k as f32 / 24.0) * std::f32::consts::TAU;
+            ring.push(vec2(cx + a.cos() * r, cy + a.sin() * r));
+        }
+    }
+    for i in 0..ring.len() {
+        draw_triangle(c, ring[i], ring[(i + 1) % ring.len()], col);
     }
 }
 
@@ -176,12 +188,14 @@ fn button_bg(rect: Rect, accent: Color) {
 fn button(rect: Rect, label: &str, input: &Input, accent: Color) -> bool {
     button_bg(rect, accent);
     let size = rect.h * 0.55;
+    // A see-through button gets a softer label too.
+    let ink = gfx::alpha(WHITE, (accent.a * 2.0).min(1.0));
     render::text_centered(
         label,
         rect.center().x,
         rect.center().y + size * 0.35,
         size,
-        WHITE,
+        ink,
     );
     input.pressed.is_some_and(|p| rect.contains(p))
 }
@@ -858,10 +872,12 @@ impl App {
 
         let mut nav = self.draw_hud(src, &level, &game, input, &hud);
         if !ended {
-            if button(hud.zoom_in, "+", input, SLATE) {
+            // See-through, so they never hide a wolf.
+            let faint = gfx::alpha(SLATE, 0.4);
+            if button(hud.zoom_in, "+", input, faint) {
                 self.zoom_by(1.25);
             }
-            if button(hud.zoom_out, "-", input, SLATE) {
+            if button(hud.zoom_out, "-", input, faint) {
                 self.zoom_by(0.8);
             }
         }
