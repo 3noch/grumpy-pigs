@@ -82,6 +82,26 @@ impl View {
     }
 }
 
+/// How strongly glowing things glow: brighter in a dark theme. Set each
+/// frame for the scene being drawn.
+static GLOW_LEVEL: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+pub fn set_theme(theme: Theme) {
+    let level = match theme {
+        Theme::Meadow => 0,
+        Theme::Storm => 1,
+    };
+    GLOW_LEVEL.store(level, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// How bright glows are in the current scene (0..1).
+pub fn glow_strength() -> f32 {
+    match GLOW_LEVEL.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => 0.45,
+        _ => 1.0,
+    }
+}
+
 /// Colors and weather for a theme's scenery.
 struct Scenery {
     sky_top: Color,

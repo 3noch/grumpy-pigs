@@ -812,6 +812,7 @@ impl App {
                 .map_or_else(sim::Theme::default, |e| e.level.theme),
             Screen::Menu => sim::Theme::Meadow,
         };
+        render::set_theme(theme);
         render::background(&view, self.time, theme);
 
         // The desktop text box takes the input while it's open.

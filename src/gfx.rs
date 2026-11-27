@@ -9,6 +9,68 @@ use crate::sim::V2;
 
 pub type P = (f32, f32);
 
+const GLOW_VERTEX: &str = r"#version 100
+attribute vec3 position;
+attribute vec2 texcoord;
+attribute vec4 color0;
+varying lowp vec2 uv;
+varying lowp vec4 color;
+uniform mat4 Model;
+uniform mat4 Projection;
+void main() {
+    gl_Position = Projection * Model * vec4(position, 1);
+    color = color0 / 255.0;
+    uv = texcoord;
+}";
+
+const GLOW_FRAGMENT: &str = r"#version 100
+varying lowp vec4 color;
+varying lowp vec2 uv;
+uniform sampler2D Texture;
+void main() {
+    gl_FragColor = color * texture2D(Texture, uv);
+}";
+
+thread_local! {
+    /// Draws by adding light to what's behind, rather than covering it.
+    static GLOW: Option<Material> = {
+        use macroquad::miniquad::{BlendFactor, BlendState, BlendValue, Equation, PipelineParams, ShaderSource};
+        let add = BlendState::new(
+            Equation::Add,
+            BlendFactor::Value(BlendValue::SourceAlpha),
+            BlendFactor::One,
+        );
+        load_material(
+            ShaderSource::Glsl {
+                vertex: GLOW_VERTEX,
+                fragment: GLOW_FRAGMENT,
+            },
+            MaterialParams {
+                pipeline_params: PipelineParams {
+                    color_blend: Some(add),
+                    ..PipelineParams::default()
+                },
+                ..MaterialParams::default()
+            },
+        )
+        .ok()
+    };
+}
+
+/// Runs `draw` so that everything it draws glows: it brightens the scene
+/// behind it, which stands out most against dark skies.
+pub fn glow(draw: impl FnOnce()) {
+    GLOW.with(|material| {
+        if let Some(m) = material {
+            gl_use_material(m);
+            draw();
+            gl_use_default_material();
+        } else {
+            draw();
+        }
+    });
+}
+
 pub fn rgb(r: u8, g: u8, b: u8) -> Color {
     Color::from_rgba(r, g, b, 255)
 }

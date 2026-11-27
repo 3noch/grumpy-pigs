@@ -945,8 +945,38 @@ pub(crate) fn twinkle(rig: &Rig, x: f32, y: f32, size: f32, col: Color) {
 
 /// A little fairy, arms raised to hold up whatever rests on her. `r` is her
 /// collider's radius. `startled` is set while she flees.
+/// A soft pool of light: an ellipse (in a rig's local units) that brightens
+/// whatever is behind it, fading to nothing at its edge.
+fn light(rig: &Rig, center: P, rx: f32, ry: f32, col: Color) {
+    let edge = Rig::ellipse_ring(center.0, center.1, rx, ry, 0.0);
+    crate::gfx::glow(|| rig.fan(center, &edge, col, alpha(col, 0.0)));
+}
+
+/// The light a fairy gives off: brighter the darker the scene.
+fn fairy_light(view: &View, pos: V2, r: f32, a: &Anim) {
+    // She shines, more brightly the darker the scene.
+    let shine = crate::render::glow_strength();
+    let flicker = 0.85 + 0.15 * ((a.t + hash(a.seed, 9) * 10.0) * 3.0).sin();
+    let halo = Rig::new(*view, pos, 0.0, r);
+    light(
+        &halo,
+        (0.0, 0.1),
+        2.8,
+        2.8,
+        rgba(255, 228, 150, 0.5 * shine * flicker),
+    );
+    light(
+        &halo,
+        (0.0, 0.1),
+        1.3,
+        1.3,
+        rgba(255, 246, 210, 0.45 * shine),
+    );
+}
+
 #[allow(clippy::too_many_lines)]
 pub fn fairy(view: &View, pos: V2, r: f32, a: &Anim, startled: bool) {
+    fairy_light(view, pos, r, a);
     if crate::holiday::thanksgiving() {
         crate::costume::cherub(view, pos, r, a, startled);
         return;
@@ -1191,10 +1221,19 @@ pub fn portal_end(view: &View, end: PortalEnd, r: f32, hue: u16, t: f32) {
     let pale = hsv(hue, 0.25, 1.0);
     let (rx, ry) = (0.42, 1.0);
 
-    // Glow around it, gently pulsing.
+    // Glow around it, gently pulsing, and light spilling out of it (brighter
+    // the darker the scene).
     let glow = Rig::ellipse_ring(0.0, 0.0, rx + 0.4, ry + 0.3, 0.0);
     let pulse = 0.35 + 0.1 * (t * 2.5).sin();
     rig.fan((0.0, 0.0), &glow, alpha(bright, pulse), alpha(bright, 0.0));
+    let shine = crate::render::glow_strength() * (0.85 + 0.15 * (t * 2.5).sin());
+    light(
+        &rig,
+        (0.0, 0.0),
+        rx + 1.6,
+        ry + 1.0,
+        alpha(bright, 0.55 * shine),
+    );
 
     // The swirling hole: bright in the middle, deep at the edge.
     let hole = Rig::ellipse_ring(0.0, 0.0, rx, ry, 0.0);
@@ -1217,6 +1256,13 @@ pub fn portal_end(view: &View, end: PortalEnd, r: f32, hue: u16, t: f32) {
     rim.push(rim[0]);
     rig.stroke(&rim, 0.2, alpha(deep, 0.9));
     rig.stroke(&rim, 0.11, bright);
+    light(
+        &rig,
+        (0.0, 0.0),
+        rx,
+        ry,
+        alpha(pale, 0.35 * crate::render::glow_strength()),
+    );
     let knob = 0.15 / r.max(0.1);
     for sy in [-1.0f32, 1.0] {
         rig.blob(
