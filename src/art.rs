@@ -8,9 +8,9 @@ use std::f32::consts::{PI, TAU};
 
 use macroquad::prelude::*;
 
-use crate::gfx::{P, Rig, alpha, bez, blink, hash, mix, rgb, rgba};
+use crate::gfx::{P, Rig, alpha, bez, blink, hash, hsv, mix, rgb, rgba};
 use crate::render::View;
-use crate::sim::{PigKind, V2, WolfKind};
+use crate::sim::{PigKind, Portal, PortalEnd, V2, WolfKind};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mood {
@@ -1172,4 +1172,73 @@ fn pilgrim_hat(rig: &Rig, line: Color) {
         0.06,
         gold,
     );
+}
+
+/// Both ends of a portal pair.
+pub fn portal(view: &View, portal: &Portal, t: f32) {
+    for (k, end) in portal.ends.iter().enumerate() {
+        portal_end(view, *end, portal.r, portal.hue, t + k as f32 * 1.7);
+    }
+}
+
+/// One end of a portal: an upright glowing oval (at angle 0) with a swirl
+/// inside, in the pair's color. `r` is half the opening's height.
+pub fn portal_end(view: &View, end: PortalEnd, r: f32, hue: u16, t: f32) {
+    let hue = f32::from(hue);
+    let rig = Rig::new(*view, end.pos, end.angle, r);
+    let bright = hsv(hue, 0.75, 1.0);
+    let deep = hsv(hue, 0.9, 0.45);
+    let pale = hsv(hue, 0.25, 1.0);
+    let (rx, ry) = (0.42, 1.0);
+
+    // Glow around it, gently pulsing.
+    let glow = Rig::ellipse_ring(0.0, 0.0, rx + 0.4, ry + 0.3, 0.0);
+    let pulse = 0.35 + 0.1 * (t * 2.5).sin();
+    rig.fan((0.0, 0.0), &glow, alpha(bright, pulse), alpha(bright, 0.0));
+
+    // The swirling hole: bright in the middle, deep at the edge.
+    let hole = Rig::ellipse_ring(0.0, 0.0, rx, ry, 0.0);
+    rig.fan((0.0, 0.0), &hole, alpha(pale, 0.95), alpha(deep, 0.95));
+    for arm in 0..3 {
+        let spin = t * 2.2 + arm as f32 / 3.0 * TAU;
+        let pts: Vec<P> = (0..14)
+            .map(|i| {
+                let f = i as f32 / 13.0;
+                let a = spin + f * 3.6;
+                let d = 0.12 + f * 0.82;
+                (a.cos() * d * rx, a.sin() * d * ry)
+            })
+            .collect();
+        rig.stroke(&pts, 0.07, alpha(pale, 0.7));
+    }
+
+    // Rim, with the solid knobs at each tip.
+    let mut rim = Rig::ellipse_ring(0.0, 0.0, rx, ry, 0.0);
+    rim.push(rim[0]);
+    rig.stroke(&rim, 0.2, alpha(deep, 0.9));
+    rig.stroke(&rim, 0.11, bright);
+    let knob = 0.15 / r.max(0.1);
+    for sy in [-1.0f32, 1.0] {
+        rig.blob(
+            0.0,
+            sy * ry,
+            knob,
+            knob,
+            0.0,
+            pale,
+            bright,
+            Some((deep, 0.04)),
+        );
+    }
+
+    // Sparkles drifting off the rim.
+    for i in 0..5 {
+        let seed = i as f32 * 1.37;
+        let life = (t * 0.6 + seed * 0.29) % 1.0;
+        let a = seed * 2.3 + t * 0.3;
+        let d = 1.0 + life * 0.5;
+        let (x, y) = (a.cos() * rx * d, a.sin() * ry * d);
+        let size = 0.07 * (1.0 - life);
+        rig.circle(x, y, size, alpha(pale, 1.0 - life));
+    }
 }

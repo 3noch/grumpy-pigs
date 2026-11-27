@@ -1107,6 +1107,9 @@ impl App {
         render::grass(view, self.time);
         render::sling_back(view, base, band_pos);
         render::queue(view, game, self.time);
+        for portal in &game.portals {
+            art::portal(view, portal, self.time);
+        }
 
         for (i, e) in game.ents.iter().enumerate().filter(|(_, e)| e.alive) {
             let mut anim = Anim::new(self.time, e.seed, Mood::Idle, V2::X);
@@ -1116,6 +1119,7 @@ impl App {
             }
             match e.kind {
                 Kind::Block(_) | Kind::Rock => render::block(view, e),
+                // Drawn with the rest of their pair, above.
                 Kind::Portal => {}
                 Kind::Fairy => {
                     anim.look = pig_pos.unwrap_or(game.pouch()) - e.pos;
