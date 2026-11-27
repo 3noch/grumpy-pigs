@@ -353,11 +353,15 @@ pub enum Event {
     },
 }
 
-/// The visual setting a level takes place in. Only one exists so far.
+/// The visual setting a level takes place in. It's only scenery: the
+/// physics are the same whatever the weather.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Theme {
+    /// Sunny hills.
     #[default]
     Meadow,
+    /// The same hills under dark clouds, with wind, rain and lightning.
+    Storm,
 }
 
 /// What a level piece is made of / does.
@@ -528,6 +532,7 @@ pub enum Phase {
 
 pub struct Game {
     world: PhysicsWorld,
+    pub theme: Theme,
     pub launcher: Launcher,
     pub ents: Vec<Ent>,
     pub pigs_left: Vec<PigKind>,
@@ -562,6 +567,7 @@ impl Game {
 
         let mut g = Game {
             world,
+            theme: level.theme,
             launcher: level.launcher,
             ents: Vec::new(),
             pigs_left: level.pigs.clone(),

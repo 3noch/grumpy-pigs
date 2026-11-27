@@ -7,7 +7,7 @@ use macroquad::prelude::*;
 
 use crate::art::{self, Anim, Mood};
 use crate::gfx::{P, Rig, alpha, bez, hash, mix, rgb, rgba};
-use crate::sim::{self, Ent, Game, Kind, Material, Phase, Shape, V2};
+use crate::sim::{self, Ent, Game, Kind, Material, Phase, Shape, Theme, V2};
 
 /// Maps world meters (y up) to screen pixels (y down), optionally mirrored
 /// left-to-right so the sling sits on the right.
@@ -82,10 +82,109 @@ impl View {
     }
 }
 
-pub fn background(view: &View, time: f32) {
+/// Colors and weather for a theme's scenery.
+struct Scenery {
+    sky_top: Color,
+    sky_bottom: Color,
+    sun: bool,
+    /// Cloud body and its shaded underside.
+    cloud: Color,
+    cloud_shade: Color,
+    /// Clouds' size and drift speed.
+    cloud_scale: f32,
+    cloud_speed: f32,
+    far_hill: Color,
+    near_hill: Color,
+    soil: Color,
+    pebble: Color,
+    lip: Color,
+    lip_dark: Color,
+    grass: Color,
+    grass_tip: Color,
+    leaf_dark: Color,
+    leaf: Color,
+    /// How hard the wind blows trees and grass (1 = a breeze).
+    wind: f32,
+}
+
+fn scenery(theme: Theme) -> Scenery {
+    match theme {
+        Theme::Meadow => Scenery {
+            sky_top: rgb(98, 170, 232),
+            sky_bottom: rgb(214, 238, 250),
+            sun: true,
+            cloud: rgba(255, 255, 255, 0.97),
+            cloud_shade: rgba(190, 210, 235, 0.9),
+            cloud_scale: 1.0,
+            cloud_speed: 1.0,
+            far_hill: rgb(150, 205, 140),
+            near_hill: rgb(116, 184, 104),
+            soil: rgb(126, 88, 58),
+            pebble: rgb(104, 72, 48),
+            lip: rgb(98, 172, 74),
+            lip_dark: rgb(74, 136, 56),
+            grass: rgb(84, 158, 64),
+            grass_tip: rgb(130, 200, 96),
+            leaf_dark: rgb(70, 140, 70),
+            leaf: rgb(92, 168, 84),
+            wind: 1.0,
+        },
+        Theme::Storm => Scenery {
+            sky_top: rgb(52, 60, 80),
+            sky_bottom: rgb(124, 136, 152),
+            sun: false,
+            cloud: rgba(118, 126, 142, 0.97),
+            cloud_shade: rgba(70, 76, 92, 0.95),
+            cloud_scale: 1.5,
+            cloud_speed: 3.0,
+            far_hill: rgb(98, 132, 104),
+            near_hill: rgb(74, 116, 76),
+            soil: rgb(92, 64, 46),
+            pebble: rgb(72, 50, 36),
+            lip: rgb(70, 128, 60),
+            lip_dark: rgb(52, 100, 46),
+            grass: rgb(62, 120, 54),
+            grass_tip: rgb(100, 160, 84),
+            leaf_dark: rgb(46, 98, 56),
+            leaf: rgb(64, 122, 70),
+            wind: 3.0,
+        },
+    }
+}
+
+/// How bright a lightning flash is right now (0 most of the time). Strikes
+/// are rare and irregular (one every 15 s or so), each a quick double flicker.
+fn lightning(time: f32) -> (f32, u32) {
+    let period = 6.5;
+    let n = (time / period).floor();
+    let strike = crate::gfx::count(n.rem_euclid(10_000.0), 10_000);
+    // Only some periods get a strike.
+    if hash(strike, 5) > 0.42 {
+        return (0.0, strike);
+    }
+    // Each strike lands at its own moment within its period.
+    let t = time - n * period - hash(strike, 1) * 3.0;
+    let flash = if (0.0..0.08).contains(&t) {
+        1.0
+    } else if (0.14..0.3).contains(&t) {
+        0.7 * (1.0 - (t - 0.14) / 0.16)
+    } else {
+        0.0
+    };
+    (flash, strike)
+}
+
+pub fn background(view: &View, time: f32, theme: Theme) {
+    let look = scenery(theme);
+    let (flash, strike) = if theme == Theme::Storm {
+        lightning(time)
+    } else {
+        (0.0, 0)
+    };
     let (sw, sh) = (screen_width(), screen_height());
-    let top = rgb(98, 170, 232);
-    let bottom = rgb(214, 238, 250);
+    let glow = rgb(214, 222, 240);
+    let top = mix(look.sky_top, glow, flash * 0.6);
+    let bottom = mix(look.sky_bottom, glow, flash * 0.5);
     let strips = 32;
     for i in 0..strips {
         let t = i as f32 / strips as f32;
@@ -97,53 +196,65 @@ pub fn background(view: &View, time: f32) {
             mix(top, bottom, t),
         );
     }
-    let sun = view.p(36.0, 17.0);
-    for (r, a) in [(3.2, 0.12), (2.4, 0.2), (1.9, 0.35)] {
-        draw_circle(sun.x, sun.y, r * view.s, rgba(255, 245, 200, a));
+    if look.sun {
+        let sun = view.p(36.0, 17.0);
+        for (r, a) in [(3.2, 0.12), (2.4, 0.2), (1.9, 0.35)] {
+            draw_circle(sun.x, sun.y, r * view.s, rgba(255, 245, 200, a));
+        }
+        draw_circle(sun.x, sun.y, 1.5 * view.s, rgb(255, 242, 180));
     }
-    draw_circle(sun.x, sun.y, 1.5 * view.s, rgb(255, 242, 180));
+    if flash > 0.5 {
+        bolt(view, strike);
+    }
 
     // Clouds with a soft underside.
     for (i, (y, sz, speed)) in [(15.0, 1.0, 0.3), (12.5, 0.7, 0.5), (17.5, 1.3, 0.2)]
         .iter()
         .enumerate()
     {
-        let span = VIEW_W + 12.0;
-        let x = ((i as f32 * 17.0 + time * speed) % span) - 6.0;
+        let sz = sz * look.cloud_scale;
+        let span = VIEW_W + 12.0 * look.cloud_scale;
+        let x =
+            ((i as f32 * 17.0 + time * speed * look.cloud_speed) % span) - 6.0 * look.cloud_scale;
         let puffs = [
             (0.0, 0.0, 1.0),
             (1.1, 0.35, 1.25),
             (2.3, 0.0, 0.95),
             (1.2, -0.25, 1.0),
         ];
+        let cloud = mix(look.cloud, rgba(230, 234, 245, 1.0), flash * 0.5);
         for (dx, dy, r) in puffs {
             let p = view.p(x + dx * sz, y + (dy - 0.12) * sz);
-            draw_circle(p.x, p.y, r * sz * view.s, rgba(190, 210, 235, 0.9));
+            draw_circle(p.x, p.y, r * sz * view.s, look.cloud_shade);
         }
         for (dx, dy, r) in puffs {
             let p = view.p(x + dx * sz, y + dy * sz);
-            draw_circle(p.x, p.y, r * sz * view.s * 0.94, rgba(255, 255, 255, 0.97));
+            draw_circle(p.x, p.y, r * sz * view.s * 0.94, cloud);
         }
     }
 
     // Rolling hills, far then near, with a few round trees.
-    let far = rgb(150, 205, 140);
-    let near = rgb(116, 184, 104);
-    for &(x, r) in &[(-2.0, 9.0), (28.0, 8.0)] {
+    for &(x, r) in &[
+        (-32.0, 8.0),
+        (-2.0, 9.0),
+        (28.0, 8.0),
+        (58.0, 9.0),
+        (86.0, 8.0),
+    ] {
         let p = view.p(x, -r * 0.55);
-        draw_circle(p.x, p.y, r * view.s, far);
+        draw_circle(p.x, p.y, r * view.s, look.far_hill);
     }
     for &(x, h, s) in &[(1.0, 3.2, 1.0), (27.5, 2.8, 0.8), (31.0, 3.0, 0.9)] {
-        tree(view, x, h, s, time);
+        tree(view, &look, x, h, s, time);
     }
-    for &(x, r) in &[(12.0, 11.0), (42.0, 12.0)] {
+    for &(x, r) in &[(-18.0, 12.0), (12.0, 11.0), (42.0, 12.0), (72.0, 11.0)] {
         let p = view.p(x, -r * 0.55);
-        draw_circle(p.x, p.y, r * view.s, near);
+        draw_circle(p.x, p.y, r * view.s, look.near_hill);
     }
 
     // Ground: grass lip, soil with pebbles.
     let g = view.p(0.0, 0.0);
-    draw_rectangle(0.0, g.y, sw, sh - g.y + 1.0, rgb(126, 88, 58));
+    draw_rectangle(0.0, g.y, sw, sh - g.y + 1.0, look.soil);
     let (x0, x1) = view.x_range();
     let mut x = x0.floor();
     while x < x1 {
@@ -155,16 +266,66 @@ pub fn background(view: &View, time: f32) {
             (0.12 + k * 0.1) * view.s,
             0.07 * view.s,
             0.0,
-            rgb(104, 72, 48),
+            look.pebble,
         );
         x += 1.3;
     }
-    draw_rectangle(0.0, g.y, sw, 0.38 * view.s, rgb(98, 172, 74));
-    draw_rectangle(0.0, g.y + 0.38 * view.s, sw, 0.1 * view.s, rgb(74, 136, 56));
+    draw_rectangle(0.0, g.y, sw, 0.38 * view.s, look.lip);
+    draw_rectangle(0.0, g.y + 0.38 * view.s, sw, 0.1 * view.s, look.lip_dark);
 }
 
-fn tree(view: &View, x: f32, h: f32, s: f32, time: f32) {
-    let sway = (time * 0.8 + x).sin() * 0.06;
+/// A jagged lightning bolt from the clouds down toward the hills.
+fn bolt(view: &View, strike: u32) {
+    let mut x = 8.0 + hash(strike, 2) * 30.0;
+    let mut y = 16.0;
+    let mut pts = vec![view.p(x, y)];
+    for k in 0..7 {
+        x += (hash(strike, 10 + k) - 0.5) * 2.4;
+        y -= 1.6 + hash(strike, 30 + k);
+        pts.push(view.p(x, y));
+    }
+    for (w, col) in [(0.5, rgba(200, 210, 255, 0.35)), (0.16, rgb(250, 250, 255))] {
+        for seg in pts.windows(2) {
+            let (a, b) = (seg[0], seg[1]);
+            draw_line(a.x, a.y, b.x, b.y, w * view.s, col);
+        }
+    }
+}
+
+/// Weather drawn over the whole scene: slanting rain, and the flash of
+/// lightning. Nothing for fair-weather themes.
+pub fn weather(view: &View, time: f32, theme: Theme) {
+    if theme != Theme::Storm {
+        return;
+    }
+    let (sw, sh) = (screen_width(), screen_height());
+    let len = view.s * 0.9;
+    let slant = 0.3;
+    let fall = view.s * 26.0;
+    let col = rgba(200, 214, 236, 0.4);
+    for i in 0..160 {
+        let k = hash(i, 7);
+        let speed = fall * (0.8 + 0.4 * hash(i, 8));
+        let y = (hash(i, 9) * (sh + len) + time * speed) % (sh + len) - len;
+        let x = (k * (sw + sh * slant) + time * speed * slant) % (sw + sh * slant) - sh * slant;
+        draw_line(x, y, x + len * slant, y + len, view.s * 0.05, col);
+    }
+    // Splashes along the ground.
+    let g = view.p(0.0, 0.0).y;
+    for i in 0..40 {
+        let life = (time * 2.0 + hash(i, 11)) % 1.0;
+        let x = hash(i, 12 + crate::gfx::count(time * 2.0 + hash(i, 11), 100_000)) * sw;
+        let r = view.s * 0.18 * life;
+        draw_circle_lines(x, g + view.s * 0.1, r, 1.5, alpha(col, 1.0 - life));
+    }
+    let (flash, _) = lightning(time);
+    if flash > 0.0 {
+        draw_rectangle(0.0, 0.0, sw, sh, rgba(235, 240, 255, flash * 0.28));
+    }
+}
+
+fn tree(view: &View, look: &Scenery, x: f32, h: f32, s: f32, time: f32) {
+    let sway = (time * 0.8 * look.wind.sqrt() + x).sin() * 0.06 * look.wind;
     let base = view.p(x, 0.0);
     let top = view.p(x + sway, h * s);
     draw_line(
@@ -183,7 +344,7 @@ fn tree(view: &View, x: f32, h: f32, s: f32, time: f32) {
             _ => (rgb(160, 52, 44), rgb(204, 82, 60)),
         }
     } else {
-        (rgb(70, 140, 70), rgb(92, 168, 84))
+        (look.leaf_dark, look.leaf)
     };
     for (dx, dy, r) in [(-0.6, 0.0, 0.9), (0.6, 0.1, 0.85), (0.0, 0.7, 1.0)] {
         let p = view.p(x + sway + dx * s, h * s + dy * s);
@@ -195,12 +356,13 @@ fn tree(view: &View, x: f32, h: f32, s: f32, time: f32) {
     }
 }
 
-/// Swaying grass tufts drawn in front of the scene.
-pub fn grass(view: &View, time: f32) {
+/// Swaying grass tufts drawn in front of the scene; in a storm they bend
+/// over in the wind.
+pub fn grass(view: &View, time: f32, theme: Theme) {
+    let look = scenery(theme);
     let (x0, x1) = view.x_range();
     let mut x = x0.floor();
-    let col = rgb(84, 158, 64);
-    let tip = rgb(130, 200, 96);
+    let lean = (look.wind - 1.0) * 0.06;
     while x < x1 {
         let k = hash(x.to_bits(), 3);
         if k > 0.35 {
@@ -208,14 +370,90 @@ pub fn grass(view: &View, time: f32) {
             for b in 0..3 {
                 let off = (b as f32 - 1.0) * 0.12;
                 let h = 0.35 + 0.2 * hash(x.to_bits(), b + 10);
-                let sway = (time * 1.6 + bx * 0.7).sin() * 0.1 + off * 0.8;
+                let gust =
+                    (time * 1.6 * look.wind.sqrt() + bx * 0.7).sin() * 0.1 * look.wind.sqrt();
+                let sway = gust + lean + off * 0.8;
                 let a = view.p(bx + off - 0.05, 0.25);
                 let c = view.p(bx + off + 0.05, 0.25);
                 let t = view.p(bx + off + sway, 0.25 + h);
-                draw_triangle(a, c, t, mix(col, tip, hash(x.to_bits(), b)));
+                draw_triangle(
+                    a,
+                    c,
+                    t,
+                    mix(look.grass, look.grass_tip, hash(x.to_bits(), b)),
+                );
             }
         }
         x += 0.9;
+    }
+}
+
+/// A little picture of a theme's sky and ground (for the editor).
+pub fn theme_swatch(rect: Rect, theme: Theme, time: f32) {
+    let look = scenery(theme);
+    let ground = rect.h * 0.24;
+    let strips = 8;
+    for i in 0..strips {
+        let t = i as f32 / strips as f32;
+        let h = (rect.h - ground) / strips as f32;
+        draw_rectangle(
+            rect.x,
+            rect.y + h * i as f32,
+            rect.w,
+            h + 0.5,
+            mix(look.sky_top, look.sky_bottom, t),
+        );
+    }
+    let gy = rect.bottom() - ground;
+    draw_rectangle(rect.x, gy, rect.w, ground, look.lip);
+    let u = rect.h;
+    if look.sun {
+        draw_circle(
+            rect.x + rect.w * 0.7,
+            rect.y + u * 0.3,
+            u * 0.17,
+            rgba(255, 245, 200, 0.4),
+        );
+        draw_circle(
+            rect.x + rect.w * 0.7,
+            rect.y + u * 0.3,
+            u * 0.12,
+            rgb(255, 242, 180),
+        );
+    }
+    let (cx, cy) = (rect.x + rect.w * 0.38, rect.y + u * 0.36);
+    for (dx, dy, r) in [(-0.14, 0.03, 0.1), (0.0, -0.03, 0.13), (0.14, 0.03, 0.1)] {
+        draw_circle(cx + dx * u, cy + dy * u, r * u, look.cloud);
+    }
+    if theme == Theme::Storm {
+        for i in 0..6 {
+            let x = cx + (i as f32 - 2.5) * u * 0.06;
+            let phase = (time * 1.5 + hash(i, 3)) % 1.0;
+            let y = cy + u * (0.12 + phase * 0.3);
+            draw_line(
+                x,
+                y,
+                x + u * 0.03,
+                y + u * 0.08,
+                u * 0.02,
+                rgba(210, 222, 240, 0.9),
+            );
+        }
+        let (flash, _) = lightning(time);
+        if flash > 0.0 {
+            let pts = [(0.0, 0.1), (-0.05, 0.22), (0.02, 0.22), (-0.03, 0.36)];
+            for w in pts.windows(2) {
+                let (a, b) = (w[0], w[1]);
+                draw_line(
+                    cx + a.0 * u + u * 0.12,
+                    cy + a.1 * u,
+                    cx + b.0 * u + u * 0.12,
+                    cy + b.1 * u,
+                    u * 0.025,
+                    rgb(255, 250, 200),
+                );
+            }
+        }
     }
 }
 

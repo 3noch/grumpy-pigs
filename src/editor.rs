@@ -20,7 +20,7 @@ use crate::render::{self, View};
 use crate::share;
 use crate::sim::{
     Ent, FAIRY_RADIUS, Game, Kind, Level, Material, PORTAL_RADIUS, Piece, PieceKind, PigKind,
-    Portal, PortalEnd, PortalLink, Shape, Size, V2, WolfKind,
+    Portal, PortalEnd, PortalLink, Shape, Size, Theme, V2, WolfKind,
 };
 
 /// Positions snap to this grid (meters).
@@ -38,6 +38,8 @@ pub enum Category {
     Pigs,
     /// Fairies and portals.
     Magic,
+    /// The level's theme: sunny or stormy.
+    Weather,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -177,6 +179,7 @@ impl Editor {
             Some("wolves") => Category::Wolves,
             Some("pigs") => Category::Pigs,
             Some("magic") => Category::Magic,
+            Some("weather") => Category::Weather,
             _ => Category::Blocks,
         };
     }
@@ -567,6 +570,10 @@ fn category_picture(cat: Category, pic: Rect, time: f32) {
         ),
         Category::Wolves => piece(PieceKind::Wolf(WolfKind::Wolf), ball(0.5), 0.0),
         Category::Magic => piece(PieceKind::Fairy, ball(FAIRY_RADIUS), 0.0),
+        Category::Weather => {
+            render::theme_swatch(pic, Theme::Storm, time);
+            return;
+        }
         Category::Pigs => {
             let k = PigKind::Grunt;
             let view = View {
@@ -670,7 +677,7 @@ fn palette(cat: Category, mat: Material, hue: u16) -> Vec<Piece> {
             piece(PieceKind::Fairy, ball(FAIRY_RADIUS), 0.0),
             new_portal(hue),
         ],
-        Category::Pigs => Vec::new(),
+        Category::Pigs | Category::Weather => Vec::new(),
     }
 }
 
@@ -1268,6 +1275,7 @@ impl App {
             ),
             (Category::Pigs, "Pigs"),
             (Category::Magic, "Magic"),
+            (Category::Weather, "Weather"),
         ];
         // Two columns of picture tabs.
         let tw = u * 0.24;
@@ -1293,6 +1301,10 @@ impl App {
 
         if ed.category == Category::Pigs {
             self.pig_palette(ed, input, Rect::new(x0, r.y, r.w - x0, r.h));
+            return;
+        }
+        if ed.category == Category::Weather {
+            self.weather_palette(ed, input, Rect::new(x0, r.y, r.w - x0, r.h));
             return;
         }
 
@@ -1332,6 +1344,42 @@ impl App {
             if input.pressed.is_some_and(|q| ir.contains(q)) {
                 ed.selection = None;
                 ed.drag = Some(Drag::New(*p));
+            }
+        }
+    }
+
+    /// Pick the level's theme. It only changes the scenery, never the physics.
+    fn weather_palette(&mut self, ed: &mut Editor, input: &Input, area: Rect) {
+        let u = ui_unit();
+        let pad = u * 0.02;
+        let h = area.h - pad * 2.0;
+        let w = h * 1.5;
+        for (i, (theme, label)) in [(Theme::Meadow, "Sunny"), (Theme::Storm, "Stormy")]
+            .into_iter()
+            .enumerate()
+        {
+            let r = Rect::new(area.x + i as f32 * (w + pad), area.y + pad, w, h);
+            let chosen = ed.level.theme == theme;
+            let border = if chosen { ORANGE } else { SLATE };
+            draw_rectangle(r.x, r.y, r.w, r.h, border);
+            let inner = Rect::new(
+                r.x + pad * 0.4,
+                r.y + pad * 0.4,
+                r.w - pad * 0.8,
+                r.h * 0.74,
+            );
+            render::theme_swatch(inner, theme, self.time);
+            render::text_centered(
+                label,
+                r.center().x,
+                r.bottom() - r.h * 0.07,
+                r.h * 0.15,
+                WHITE,
+            );
+            if input.pressed.is_some_and(|p| r.contains(p)) && !chosen {
+                ed.checkpoint();
+                ed.level.theme = theme;
+                ed.rebuild(false);
             }
         }
     }

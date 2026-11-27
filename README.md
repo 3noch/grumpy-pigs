@@ -36,6 +36,10 @@ procedurally, so there are no asset files.
 
 14 levels, from "Straw Hut" to "Big Bad Boss", "Fairy Lift" and "Portal Party".
 
+**Themes:** each level is set in sunny **Meadow** or a rainy, windy **Storm** with
+lightning. Themes are only scenery: the physics are identical. "Big Bad Tower" and
+"Big Bad Boss" are stormy.
+
 **Easter egg:** on US Thanksgiving the game becomes *Peckish Pilgrims*: pilgrim-hatted
 pigs, turkeys instead of wolves, cherubs instead of fairies and autumn trees
 (`GRUMPY_HOLIDAY=thanksgiving` previews it on desktop).
@@ -51,6 +55,7 @@ to remix it (remixes credit the original author).
   which stay exactly where you put them (great for floating platforms), and portals:
   dragging one out places both ends of a pair, each pair in a color unlike the others.
   Move and turn each end on its own; deleting either end deletes the pair.
+- **Weather** tab: pick Sunny or Stormy for the level.
 - Every button has a picture as well as a word, so kids who can't read yet can build too.
 - Tap a piece to select it: rotate in 10° steps, resize, copy, delete; tapping a
   material restyles the selected block. Drag the slingshot to move it, even onto a ledge.
@@ -170,7 +175,7 @@ Dev aids (desktop build, environment variables):
 
 - `GRUMPY_SHOT=out.png GRUMPY_FRAMES=300` renders frames then saves a PNG and exits.
 - `GRUMPY_LEVEL=3`, `GRUMPY_LAUNCH=deg,pow`, `GRUMPY_TAP=secs`, `GRUMPY_AIM=deg,pow`: play a level and shoot.
-- `GRUMPY_EDIT=n` (0 = new), `GRUMPY_EDIT_SELECT=i`, `GRUMPY_EDIT_CAT=earth|blocks|wolves|pigs|magic`: open the editor.
+- `GRUMPY_EDIT=n` (0 = new), `GRUMPY_EDIT_SELECT=i`, `GRUMPY_EDIT_CAT=earth|blocks|wolves|pigs|magic|weather`: open the editor.
 - `GRUMPY_INPUT="10:p:435:659;14:m:600:350;18:r:640:300"`: replay pointer events
   (frame:press/move/release:x:y in screen points), e.g. to test editor drags.
 - `GRUMPY_MIRROR=1`, `GRUMPY_TAB=mine|friends`, `GRUMPY_LAUNCHER=x,y`.

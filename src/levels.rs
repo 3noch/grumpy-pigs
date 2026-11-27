@@ -127,6 +127,14 @@ impl B {
     }
 }
 
+/// The same level under storm clouds (scenery only).
+fn stormy(level: Level) -> Level {
+    Level {
+        theme: Theme::Storm,
+        ..level
+    }
+}
+
 pub fn all() -> Vec<Level> {
     vec![
         straw_hut(),
@@ -220,7 +228,7 @@ fn big_bad_tower() -> Level {
     let w = b.post(25.0, 0.0, 2.0, Brick);
     b.cube(25.0, w, 0.8, Wood);
     b.post(25.5, 0.0, 2.0, Brick);
-    b.build("Big Bad Tower", vec![Boomer, Dasher, Hog, Boomer])
+    stormy(b.build("Big Bad Tower", vec![Boomer, Dasher, Hog, Boomer]))
 }
 
 /// Introduces the Litter (split) and pups.
@@ -337,7 +345,7 @@ fn big_bad_boss() -> Level {
     let t3 = b.frame(30.0, t2, 2.4, 1.6, Ice);
     b.pup(30.0, t2);
     b.wolf(30.0, t3, 0.5);
-    b.build("Big Bad Boss", vec![Thumper, Litter, Puffer, Boomer, Hog])
+    stormy(b.build("Big Bad Boss", vec![Thumper, Litter, Puffer, Boomer, Hog]))
 }
 
 /// A hut held up in the sky by two fairies. Startle them and it all comes

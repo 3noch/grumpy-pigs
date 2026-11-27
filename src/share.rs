@@ -164,12 +164,16 @@ fn pig_from_id(id: u64) -> Option<PigKind> {
 fn theme_id(theme: Theme) -> u64 {
     match theme {
         Theme::Meadow => 0,
+        Theme::Storm => 1,
     }
 }
 
-fn theme_from_id(_id: u64) -> Theme {
-    // Unknown themes are cosmetic: fall back to the default.
-    Theme::Meadow
+fn theme_from_id(id: u64) -> Theme {
+    match id {
+        1 => Theme::Storm,
+        // Unknown themes are cosmetic: fall back to the default.
+        _ => Theme::Meadow,
+    }
 }
 
 // --- Encoding ---
@@ -533,6 +537,7 @@ mod tests {
             // Quantized to centimeters, so compare by re-encoding.
             assert_eq!(encode(&back), code, "{}", lvl.name);
             assert_eq!(back.name, lvl.name);
+            assert_eq!(back.theme, lvl.theme);
             assert_eq!(back.pieces.len(), lvl.pieces.len());
             assert_eq!(back.pigs, lvl.pigs);
             for (a, b) in lvl.pieces.iter().zip(&back.pieces) {

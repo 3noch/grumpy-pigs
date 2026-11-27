@@ -804,7 +804,15 @@ impl App {
         } else {
             View::fit(shake, self.mirrored)
         };
-        render::background(&view, self.time);
+        let theme = match &self.screen {
+            Screen::Play { level, .. } => level.theme,
+            Screen::Edit => self
+                .editor
+                .as_ref()
+                .map_or_else(sim::Theme::default, |e| e.level.theme),
+            Screen::Menu => sim::Theme::Meadow,
+        };
+        render::background(&view, self.time, theme);
 
         // The desktop text box takes the input while it's open.
         let blocked = Input::default();
@@ -1147,7 +1155,7 @@ impl App {
         let base = game.launcher.base();
         let loaded = game.current_pig();
         let band_pos = loaded.map(|_| aim_pos.unwrap_or(game.pouch()));
-        render::grass(view, self.time);
+        render::grass(view, self.time, game.theme);
         render::sling_back(view, base, band_pos);
         render::queue(view, game, self.time);
         for portal in &game.portals {
@@ -1235,6 +1243,7 @@ impl App {
         {
             render::trajectory(view, game, pull, self.time);
         }
+        render::weather(view, self.time, game.theme);
     }
 
     fn draw_effects(&mut self, view: &View, dt: f32) {
