@@ -91,7 +91,7 @@ its slingshot stands (on the ground or up on a platform).
 `cargo run --release -- '<link>'` opens a link in the desktop build.
 
 Controls: press on the sling, pull back, release. Drag anywhere else to look around the
-level. Mouse and touch both work.
+level, and zoom with the + / - buttons (or the mouse wheel). Mouse and touch both work.
 Left-handed? The mirror button (◀|▶, on the title screen and in-game) flips the game so the
 sling is on the right and you fire to the left. The choice is remembered on that device.
 

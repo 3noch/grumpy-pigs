@@ -95,6 +95,9 @@ struct App {
     pan: V2,
     /// A pan drag in progress: where it started and the pan at that moment.
     pan_drag: Option<(Vec2, V2)>,
+    /// Camera zoom while playing (1 = the whole play area fits). Kept from
+    /// level to level.
+    zoom: f32,
     /// Left-handed mode: sling on the right, firing left.
     mirrored: bool,
     time: f32,
@@ -557,6 +560,7 @@ impl App {
             aim_start: None,
             pan: V2::ZERO,
             pan_drag: None,
+            zoom: 1.0,
             mirrored: platform::pref(platform::Pref::Mirror),
             time: 0.0,
             bank: bank::Bank::load(),
@@ -725,6 +729,17 @@ impl App {
         self.pan_drag = None;
     }
 
+    /// The camera while playing.
+    fn play_view(&self, shake: Vec2, pan: V2) -> View {
+        View::fit(shake, self.mirrored)
+            .zoomed(self.zoom)
+            .panned(pan)
+    }
+
+    fn zoom_by(&mut self, factor: f32) {
+        self.zoom = (self.zoom * factor).clamp(0.6, 2.5);
+    }
+
     fn begin(&mut self, src: Source, level: Level) {
         self.reset_play_effects();
         self.screen = Screen::Play {
@@ -771,7 +786,7 @@ impl App {
         let view = if let (Screen::Edit, Some(ed)) = (&self.screen, &self.editor) {
             ed.view(self.mirrored)
         } else if matches!(self.screen, Screen::Play { .. }) {
-            View::fit(shake, self.mirrored).panned(self.pan)
+            self.play_view(shake, self.pan)
         } else {
             View::fit(shake, self.mirrored)
         };
@@ -825,10 +840,14 @@ impl App {
         else {
             return;
         };
-        let hud = HudButtons::new();
+        let hud = HudButtons::new(self.mirrored);
         let ended = matches!(game.phase, Phase::Won { .. } | Phase::Lost { .. });
         if !ended && !input.pressed.is_some_and(|p| hud.contains(p)) {
             self.handle_input(&mut game, input, view);
+        }
+        let wheel = mouse_wheel().1;
+        if wheel.abs() > 0.0 && !ended {
+            self.zoom_by(if wheel > 0.0 { 1.1 } else { 1.0 / 1.1 });
         }
 
         game.update(dt);
@@ -838,6 +857,14 @@ impl App {
         self.draw_effects(view, dt);
 
         let mut nav = self.draw_hud(src, &level, &game, input, &hud);
+        if !ended {
+            if button(hud.zoom_in, "+", input, SLATE) {
+                self.zoom_by(1.25);
+            }
+            if button(hud.zoom_out, "-", input, SLATE) {
+                self.zoom_by(0.8);
+            }
+        }
         let overlay = self.end_overlay(src, &level, &game, input);
         if nav == Nav::Stay {
             nav = overlay;
@@ -880,7 +907,7 @@ impl App {
             self.pan_drag = Some((p, self.pan));
         }
         if let (Some((start, pan0)), Some(cur)) = (self.pan_drag, input.down) {
-            let still = View::fit(Vec2::ZERO, self.mirrored).panned(pan0);
+            let still = self.play_view(Vec2::ZERO, pan0);
             let moved = still.unproject(cur) - still.unproject(start);
             self.pan = (pan0 - moved).clamp(V2::new(-20.0, 0.0), V2::new(30.0, 20.0));
         }
@@ -1414,14 +1441,28 @@ struct HudButtons {
     share: Rect,
     mirror: Rect,
     full: Option<Rect>,
+    zoom_in: Rect,
+    zoom_out: Rect,
 }
 
 impl HudButtons {
-    fn new() -> Self {
+    /// Zoom buttons go in the bottom corner away from the sling.
+    fn new(mirrored: bool) -> Self {
         let u = ui_unit();
         let bs = u * 0.08;
         let slot = |i: f32| Rect::new(u * 0.03 + bs * 1.2 * i, u * 0.03, bs, bs);
+        let zy = screen_height() - bs - u * 0.03;
+        let zoom_x = |i: f32| {
+            let from_edge = u * 0.03 + bs * 1.2 * i;
+            if mirrored {
+                from_edge
+            } else {
+                screen_width() - from_edge - bs
+            }
+        };
         HudButtons {
+            zoom_in: Rect::new(zoom_x(1.0), zy, bs, bs),
+            zoom_out: Rect::new(zoom_x(0.0), zy, bs, bs),
             menu: slot(0.0),
             retry: slot(1.0),
             edit: slot(2.0),
@@ -1438,6 +1479,8 @@ impl HudButtons {
             Some(self.share),
             Some(self.mirror),
             self.full,
+            Some(self.zoom_in),
+            Some(self.zoom_out),
         ]
         .into_iter()
         .flatten()

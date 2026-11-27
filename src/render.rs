@@ -43,6 +43,15 @@ impl View {
             mirror: mirrored.then_some(screen_width()),
         }
     }
+    /// The same view zoomed by `zoom`, keeping the sling's end of the ground
+    /// (the play area's left edge, or right when mirrored) where it was.
+    #[must_use]
+    pub fn zoomed(mut self, zoom: f32) -> Self {
+        let anchor = self.ox + VIEW_X0 * self.s;
+        self.s *= zoom;
+        self.ox = anchor - VIEW_X0 * self.s;
+        self
+    }
     /// The same view with the camera moved by `pan` meters.
     #[must_use]
     pub fn panned(mut self, pan: crate::sim::V2) -> Self {
