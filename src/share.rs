@@ -27,9 +27,11 @@
 //! | 6   | launcher | x:zigzag y:zigzag (cm; the point under the sling's base), then future fields. Omitted = (6 m, 0) |
 //!
 //! ```text
-//! piece   := len:varint  kind:varint  x:zigzag  y:zigzag  angle:varint  size…  (future fields…)
+//! piece   := len:varint  kind:varint  x:zigzag  y:zigzag  angle:varint  size…  extra…  (future fields…)
 //! size    := w:varint h:varint     for box pieces
-//!          | r:varint              for round pieces (wolves, boulders)
+//!          | r:varint              for round pieces (wolves, boulders, fairies, portals)
+//! extra   := x:zigzag y:zigzag angle:varint hue:varint    for portals: the far end and its color
+//!          | (nothing)             for everything else
 //! ```
 //!
 //! Lengths are in centimeters; `angle` is in 1/65536ths of a full turn, so
@@ -43,7 +45,9 @@
 
 use std::f32::consts::TAU;
 
-use crate::sim::{Launcher, Level, Material, Piece, PieceKind, PigKind, Size, Theme, WolfKind};
+use crate::sim::{
+    Launcher, Level, Material, Piece, PieceKind, PigKind, PortalLink, Size, Theme, WolfKind,
+};
 
 pub const PREFIX: &str = "L1.";
 
@@ -92,6 +96,7 @@ fn piece_kind_id(kind: PieceKind) -> u64 {
         PieceKind::Wolf(WolfKind::Helmet) => 20,
         PieceKind::Wolf(WolfKind::Boss) => 22,
         PieceKind::Fairy => 24,
+        PieceKind::Portal(_) => 26,
     }
 }
 
@@ -110,6 +115,13 @@ fn piece_kind_from_id(id: u64) -> Option<PieceKind> {
         20 => PieceKind::Wolf(WolfKind::Helmet),
         22 => PieceKind::Wolf(WolfKind::Boss),
         24 => PieceKind::Fairy,
+        // The far end is filled in from the piece's extra fields.
+        26 => PieceKind::Portal(PortalLink {
+            x: 0.0,
+            y: 0.0,
+            angle: 0.0,
+            hue: 0,
+        }),
         _ => return None,
     })
 }
@@ -118,7 +130,7 @@ fn piece_kind_from_id(id: u64) -> Option<PieceKind> {
 fn is_round(kind: PieceKind) -> bool {
     matches!(
         kind,
-        PieceKind::Boulder | PieceKind::Wolf(_) | PieceKind::Fairy
+        PieceKind::Boulder | PieceKind::Wolf(_) | PieceKind::Fairy | PieceKind::Portal(_)
     )
 }
 
@@ -218,6 +230,12 @@ fn encode_piece(p: &Piece) -> Vec<u8> {
         };
         put_varint(&mut b, cm_len(w));
         put_varint(&mut b, cm_len(h));
+    }
+    if let PieceKind::Portal(link) = p.kind {
+        put_zigzag(&mut b, cm(link.x));
+        put_zigzag(&mut b, cm(link.y));
+        put_varint(&mut b, turn_units(link.angle));
+        put_varint(&mut b, u64::from(link.hue % 360));
     }
     b
 }
@@ -328,7 +346,7 @@ fn radians(units: u64) -> f32 {
 fn decode_piece(b: &[u8]) -> Result<Option<Piece>, DecodeError> {
     let mut r = Reader::new(b);
     let id = r.varint()?;
-    let Some(kind) = piece_kind_from_id(id) else {
+    let Some(mut kind) = piece_kind_from_id(id) else {
         return if id % 2 == 1 {
             Ok(None)
         } else {
@@ -348,6 +366,12 @@ fn decode_piece(b: &[u8]) -> Result<Option<Piece>, DecodeError> {
             h: meters_len(r.varint()?),
         }
     };
+    if let PieceKind::Portal(link) = &mut kind {
+        link.x = meters(r.zigzag()?);
+        link.y = meters(r.zigzag()?);
+        link.angle = radians(r.varint()?);
+        link.hue = u16::try_from(r.varint()? % 360).unwrap_or(0);
+    }
     // Any remaining bytes are fields from a newer format version.
     Ok(Some(Piece {
         kind,
@@ -512,7 +536,13 @@ mod tests {
             assert_eq!(back.pieces.len(), lvl.pieces.len());
             assert_eq!(back.pigs, lvl.pigs);
             for (a, b) in lvl.pieces.iter().zip(&back.pieces) {
-                assert_eq!(a.kind, b.kind);
+                assert_eq!(piece_kind_id(a.kind), piece_kind_id(b.kind));
+                if let (PieceKind::Portal(la), PieceKind::Portal(lb)) = (a.kind, b.kind) {
+                    assert!((la.x - lb.x).abs() < 0.006 && (la.y - lb.y).abs() < 0.006);
+                    let d = (la.angle.rem_euclid(TAU) - lb.angle).abs();
+                    assert!(d < 0.001 || TAU - d < 0.001);
+                    assert_eq!(la.hue, lb.hue);
+                }
                 assert!((a.x - b.x).abs() < 0.006 && (a.y - b.y).abs() < 0.006);
                 let d = (a.angle.rem_euclid(TAU) - b.angle).abs();
                 assert!(d < 0.001 || TAU - d < 0.001, "{} vs {}", a.angle, b.angle);

@@ -925,6 +925,19 @@ impl App {
     }
 
     /// A startled fairy darts off, shedding sparkles.
+    /// A puff of the portal's color where something went in and came out.
+    fn warp_effect(&mut self, from: V2, to: V2, hue: u16) {
+        for (pos, n) in [(from, 8), (to, 14)] {
+            for _ in 0..n {
+                let a = rand::gen_range(0.0, std::f32::consts::TAU);
+                let vel = vec2(a.cos(), a.sin()) * rand::gen_range(1.0, 3.5);
+                let color = gfx::hsv(f32::from(hue), rand::gen_range(0.2, 0.7), 1.0);
+                let size = rand::gen_range(0.06, 0.15);
+                self.spawn(pos, vel, rand::gen_range(0.3, 0.7), size, color, false);
+            }
+        }
+    }
+
     fn flee_effect(&mut self, pos: V2, radius: f32, seed: u32, dir: V2) {
         // Off she goes: up and away from whatever hit her.
         let dart = if dir.x.abs() > 0.2 {
@@ -1027,6 +1040,7 @@ impl App {
                     seed,
                     dir,
                 } => self.flee_effect(pos, radius, seed, dir),
+                Event::Warp { from, to, hue } => self.warp_effect(from, to, hue),
                 Event::Poof { pos } => {
                     if wolves_alive > 0 {
                         self.laugh = 2.0;
@@ -1102,6 +1116,7 @@ impl App {
             }
             match e.kind {
                 Kind::Block(_) | Kind::Rock => render::block(view, e),
+                Kind::Portal => {}
                 Kind::Fairy => {
                     anim.look = pig_pos.unwrap_or(game.pouch()) - e.pos;
                     art::fairy(view, e.pos, e.radius(), &anim, false);

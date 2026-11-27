@@ -3,9 +3,9 @@
 use crate::sim::{
     FAIRY_RADIUS, Launcher, Level, Material,
     Material::{Brick, Ice, Straw, Tnt, Wood},
-    Piece, PieceKind,
+    PORTAL_RADIUS, Piece, PieceKind,
     PigKind::{Boomer, Dasher, Grunt, Hog, Litter, Puffer, Thumper},
-    Size, Theme, WolfKind,
+    PortalLink, Size, Theme, WolfKind,
 };
 
 const T: f32 = 0.4; // thickness of posts and planks
@@ -79,6 +79,18 @@ impl B {
         self.add(PieceKind::Fairy, x, y, 0.0, Size::Ball { r });
         y + r
     }
+    /// A pair of portals: `a` and `b` are each end's (x, y, angle), and `hue`
+    /// their color on the color wheel.
+    fn portal(&mut self, a: (f32, f32, f32), b: (f32, f32, f32), hue: u16) {
+        let link = PortalLink {
+            x: b.0,
+            y: b.1,
+            angle: b.2,
+            hue,
+        };
+        let size = Size::Ball { r: PORTAL_RADIUS };
+        self.add(PieceKind::Portal(link), a.0, a.1, a.2, size);
+    }
     /// Solid terrain from the ground up to `top`. Returns `top`.
     fn hill(&mut self, cx: f32, top: f32, w: f32) -> f32 {
         let size = Size::Box { w, h: top };
@@ -130,6 +142,7 @@ pub fn all() -> Vec<Level> {
         twin_peaks(),
         big_bad_boss(),
         fairy_lift(),
+        portal_party(),
     ]
 }
 
@@ -346,4 +359,25 @@ fn fairy_lift() -> Level {
     b.tnt(35.0, top);
     b.helmet(36.4, 0.0);
     b.build("Fairy Lift", vec![Grunt, Dasher, Grunt])
+}
+
+/// A cliff too tall to shoot past, and two portals that go round it: one
+/// tips a pig down into the near fort, the other drops it onto the far tower.
+fn portal_party() -> Level {
+    use std::f32::consts::FRAC_PI_2;
+    let mut b = B::default();
+    b.hill(20.0, 8.0, 1.2);
+    b.portal((14.0, 3.6, 0.0), (26.5, 5.0, -0.6), 285);
+    b.portal((12.0, 7.6, 0.0), (34.5, 8.5, -FRAC_PI_2), 160);
+
+    b.tnt(28.4, 0.0);
+    let t = b.frame(30.5, 0.0, 3.0, 2.2, Wood);
+    b.wolf(30.5, 0.0, 0.5);
+    b.pup(30.5, t);
+
+    let t = b.frame(36.0, 0.0, 2.4, 2.6, Straw);
+    b.wolf(36.0, 0.0, 0.5);
+    b.tnt(35.2, t);
+    b.helmet(36.4, t);
+    b.build("Portal Party", vec![Grunt, Grunt, Dasher])
 }

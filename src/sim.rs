@@ -22,6 +22,17 @@ const COMBO_WINDOW: f32 = 1.5;
 pub const FAIRY_RADIUS: f32 = 0.6;
 /// Anything touching a fairy faster than this (m/s) startles her away.
 const FAIRY_STARTLE: f32 = 2.5;
+/// Half the height of a portal's opening, as placed from the palette.
+pub const PORTAL_RADIUS: f32 = 0.9;
+/// The solid knobs at the tips of a portal's oval: anything wider than the
+/// opening bumps into them instead of squeezing through.
+const PORTAL_RIM: f32 = 0.12;
+/// Something stops warping after this many trips (so two portals stacked
+/// above each other can't keep a pig falling forever).
+const MAX_WARPS: u8 = 12;
+/// Things must cross a portal at least this fast (m/s) to warp, so pieces
+/// resting across an opening don't flicker between the two ends.
+const WARP_MIN_SPEED: f32 = 0.3;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Material {
@@ -179,6 +190,8 @@ pub enum Kind {
     /// Hovers in place holding up whatever rests on her, until something
     /// hits her and she flies off.
     Fairy,
+    /// A pair of portals (see [`Game::portals`]); only their rims are solid.
+    Portal,
 }
 
 impl Kind {
@@ -240,6 +253,10 @@ pub struct Ent {
     /// Puffer inflation progress 0..1, once triggered.
     pub puff: Option<f32>,
     prev_v: V2,
+    /// Seconds before this can warp again.
+    warp_cool: f32,
+    /// How many times this has gone through a portal.
+    warps: u8,
 }
 
 impl Ent {
@@ -263,6 +280,8 @@ impl Ent {
             seed,
             puff: None,
             prev_v: V2::ZERO,
+            warp_cool: 0.0,
+            warps: 0,
         }
     }
 
@@ -318,6 +337,12 @@ pub enum Event {
     Poof {
         pos: V2,
     },
+    /// Something went through a portal.
+    Warp {
+        from: V2,
+        to: V2,
+        hue: u16,
+    },
     /// A fairy got startled and flew away.
     Flee {
         pos: V2,
@@ -347,6 +372,70 @@ pub enum PieceKind {
     Wolf(WolfKind),
     /// A little winged helper who holds things up in mid-air.
     Fairy,
+    /// A pair of linked portals. The piece's own position and angle are one
+    /// end; the link holds the other end and their color. Its size is a ball
+    /// whose radius is half the opening's height.
+    Portal(PortalLink),
+}
+
+/// The far end of a portal pair, and the pair's color.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct PortalLink {
+    pub x: f32,
+    pub y: f32,
+    pub angle: f32,
+    /// Where the color sits on the color wheel, in degrees (0..360).
+    pub hue: u16,
+}
+
+/// One end of a portal in a running game. At angle 0 the opening stands
+/// upright and things pass through it left to right (or back).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct PortalEnd {
+    pub pos: V2,
+    pub angle: f32,
+}
+
+impl PortalEnd {
+    /// Along the opening.
+    pub fn up(self) -> V2 {
+        rotate(V2::Y, self.angle)
+    }
+    /// Straight through the opening.
+    pub fn normal(self) -> V2 {
+        rotate(V2::X, self.angle)
+    }
+}
+
+/// A pair of linked portals in a running game.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Portal {
+    pub ends: [PortalEnd; 2],
+    /// Half the opening's height.
+    pub r: f32,
+    pub hue: u16,
+}
+
+impl Portal {
+    pub fn from_piece(p: &Piece) -> Option<Self> {
+        let PieceKind::Portal(link) = p.kind else {
+            return None;
+        };
+        Some(Portal {
+            ends: [
+                PortalEnd {
+                    pos: V2::new(p.x, p.y),
+                    angle: p.angle,
+                },
+                PortalEnd {
+                    pos: V2::new(link.x, link.y),
+                    angle: link.angle,
+                },
+            ],
+            r: p.size.radius().clamp(0.2, 10.0),
+            hue: link.hue,
+        })
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -447,6 +536,9 @@ pub struct Game {
     pub max_score: u32,
     pub time: f32,
     pub events: Vec<Event>,
+    /// Portal pairs in the level. Each also has a placeholder entity (of kind
+    /// [`Kind::Portal`]) so entities still line up with the level's pieces.
+    pub portals: Vec<Portal>,
     /// Current sling pull (offset from pouch), set by input while aiming.
     pub aim: Option<V2>,
     acc: f32,
@@ -478,6 +570,7 @@ impl Game {
             max_score: 0,
             time: 0.0,
             events: Vec::new(),
+            portals: Vec::new(),
             aim: None,
             acc: 0.0,
             blasts: Vec::new(),
@@ -500,6 +593,10 @@ impl Game {
     fn add_piece(&mut self, p: &Piece) {
         // Keep sizes physically sane; shared levels can contain anything.
         const MIN: f32 = 0.01;
+        if let Some(portal) = Portal::from_piece(p) {
+            self.add_portal(portal);
+            return;
+        }
         let size = match (p.kind, p.size) {
             // Wolves and fairies are always round.
             (PieceKind::Wolf(_) | PieceKind::Fairy, s) => Size::Ball {
@@ -512,7 +609,7 @@ impl Game {
             (_, Size::Ball { r }) => Size::Ball { r: r.max(MIN) },
         };
         let body = match p.kind {
-            PieceKind::Terrain => RigidBodyBuilder::fixed(),
+            PieceKind::Terrain | PieceKind::Portal(_) => RigidBodyBuilder::fixed(),
             PieceKind::Boulder => RigidBodyBuilder::dynamic().angular_damping(0.1),
             PieceKind::Wolf(_) => RigidBodyBuilder::dynamic().angular_damping(1.0),
             PieceKind::Block(_) => RigidBodyBuilder::dynamic(),
@@ -555,9 +652,88 @@ impl Game {
                 (col, Kind::Wolf(w), w.hp())
             }
             PieceKind::Fairy => (col.friction(0.9), Kind::Fairy, f32::INFINITY),
+            PieceKind::Portal(_) => (col.sensor(true), Kind::Portal, f32::INFINITY),
         };
         let (h, c) = self.world.insert(body, col);
         self.push(h, c, kind, shape, hp);
+    }
+
+    /// Only the knobs at the tips of each oval are solid.
+    fn add_portal(&mut self, portal: Portal) {
+        let body = self.world.insert_body(RigidBodyBuilder::fixed());
+        let mut first = None;
+        for end in portal.ends {
+            for side in [-1.0, 1.0] {
+                let tip = end.pos + end.up() * side * portal.r;
+                let col = ColliderBuilder::ball(PORTAL_RIM)
+                    .translation(tip)
+                    .friction(0.6);
+                let c = self.world.insert_collider(col, Some(body));
+                first.get_or_insert(c);
+            }
+        }
+        let col = first.unwrap_or_else(ColliderSet::invalid_handle);
+        let shape = Shape::Ball { r: portal.r };
+        let i = self.push(body, col, Kind::Portal, shape, f32::INFINITY);
+        self.ents[i].pos = portal.ends[0].pos;
+        self.ents[i].angle = portal.ends[0].angle;
+        self.portals.push(portal);
+    }
+
+    /// Sends anything whose center just crossed a portal's opening out of
+    /// the other end, as if the two ends were one doorway: it keeps its
+    /// speed, turned by however much the far end is turned.
+    fn step_portals(&mut self) {
+        if self.portals.is_empty() {
+            return;
+        }
+        for i in 0..self.ents.len() {
+            let e = &mut self.ents[i];
+            if !e.alive || matches!(e.kind, Kind::Rock | Kind::Fairy | Kind::Portal) {
+                continue;
+            }
+            e.warp_cool = (e.warp_cool - DT).max(0.0);
+            if e.warp_cool > 0.0 || e.warps >= MAX_WARPS {
+                continue;
+            }
+            let body = &self.world.bodies[e.handle];
+            let (before, now, v) = (e.pos, body.translation(), body.linvel());
+            let Some((portal, k)) = self.portals.iter().find_map(|portal| {
+                (0..2)
+                    .find(|&k| {
+                        let a = portal.ends[k];
+                        let n = a.normal();
+                        let crossed =
+                            ((before - a.pos).dot(n) > 0.0) != ((now - a.pos).dot(n) > 0.0);
+                        crossed
+                            && (now - a.pos).dot(a.up()).abs() < portal.r - PORTAL_RIM
+                            && v.dot(n).abs() > WARP_MIN_SPEED
+                    })
+                    .map(|k| (*portal, k))
+            }) else {
+                continue;
+            };
+            let (a, b) = (portal.ends[k], portal.ends[1 - k]);
+            let turn = b.angle - a.angle;
+            let to = b.pos + rotate(now - a.pos, turn);
+            let vel = rotate(v, turn);
+            let body = &mut self.world.bodies[e.handle];
+            let angle = body.rotation().angle() + turn;
+            body.set_translation(to, true);
+            body.set_rotation(Rotation::new(angle), true);
+            body.set_linvel(vel, true);
+            e.pos = to;
+            e.angle = angle;
+            e.prev_v = vel;
+            e.vel = vel;
+            e.warp_cool = 0.1;
+            e.warps += 1;
+            self.events.push(Event::Warp {
+                from: now,
+                to,
+                hue: portal.hue,
+            });
+        }
     }
 
     fn push(
@@ -590,6 +766,8 @@ impl Game {
             seed,
             puff: None,
             prev_v: body.linvel(),
+            warp_cool: 0.0,
+            warps: 0,
         });
         self.ents.len() - 1
     }
@@ -752,7 +930,7 @@ impl Game {
         });
         for i in 0..self.ents.len() {
             let e = &self.ents[i];
-            if !e.alive || Some(i) == skip || e.kind == Kind::Rock {
+            if !e.alive || Some(i) == skip || matches!(e.kind, Kind::Rock | Kind::Portal) {
                 continue;
             }
             let d = e.pos - center;
@@ -923,12 +1101,14 @@ impl Game {
         if matches!(self.phase, Phase::Won { .. } | Phase::Lost { .. }) {
             // Keep things tumbling in the background but stop scoring changes.
             self.world.step();
+            self.step_portals();
             self.sync_positions();
             self.advance_phase();
             return;
         }
         self.step_puffers();
         self.world.step();
+        self.step_portals();
 
         let damage_on = self.time > GRACE;
         let flying = match self.phase {
@@ -942,7 +1122,7 @@ impl Game {
 
         for i in 0..self.ents.len() {
             let e = &mut self.ents[i];
-            if !e.alive || matches!(e.kind, Kind::Rock | Kind::Fairy) {
+            if !e.alive || matches!(e.kind, Kind::Rock | Kind::Fairy | Kind::Portal) {
                 continue;
             }
             let body = &self.world.bodies[e.handle];
@@ -980,7 +1160,7 @@ impl Game {
         // Remove destroyed / out-of-bounds entities.
         for i in 0..self.ents.len() {
             let e = &self.ents[i];
-            if !e.alive || matches!(e.kind, Kind::Rock | Kind::Fairy) {
+            if !e.alive || matches!(e.kind, Kind::Rock | Kind::Fairy | Kind::Portal) {
                 continue;
             }
             let oob = e.pos.y < -4.0 || e.pos.x < -8.0 || e.pos.x > 60.0;
@@ -1120,6 +1300,8 @@ mod tests {
             g.update(DT);
         }
     }
+
+    use std::f32::consts::FRAC_PI_2;
 
     #[test]
     fn levels_settle_without_damage() {
@@ -1291,6 +1473,87 @@ mod tests {
         assert!((blast_scale(crate_of(0.8)) - 1.0).abs() < 1e-5);
         assert!((blast_scale(crate_of(1.6)) - 2.0).abs() < 1e-5);
         assert!(blast_scale(crate_of(0.4)) < 1.0);
+    }
+
+    /// A level with one portal pair (ends `a` and `b`) and a far-off wolf.
+    fn portal_level(a: (f32, f32, f32), b: (f32, f32, f32)) -> Level {
+        let portal = Piece {
+            kind: PieceKind::Portal(PortalLink {
+                x: b.0,
+                y: b.1,
+                angle: b.2,
+                hue: 200,
+            }),
+            x: a.0,
+            y: a.1,
+            angle: a.2,
+            size: Size::Ball { r: PORTAL_RADIUS },
+        };
+        let wolf = Piece {
+            kind: PieceKind::Wolf(WolfKind::Wolf),
+            x: 50.0,
+            y: 0.5,
+            angle: 0.0,
+            size: Size::Ball { r: 0.5 },
+        };
+        Level {
+            pieces: vec![portal, wolf],
+            pigs: vec![PigKind::Grunt],
+            ..Level::default()
+        }
+    }
+
+    fn fly(g: &mut Game, pos: V2, vel: V2) -> usize {
+        let idx = g.spawn_pig(PigKind::Grunt, pos, vel);
+        g.phase = Phase::Flying {
+            ent: idx,
+            t: 0.0,
+            slow_t: 0.0,
+            used: false,
+            impact_t: None,
+        };
+        idx
+    }
+
+    #[test]
+    fn portals_keep_speed_and_turn_it() {
+        // In through an upright portal going right, out of one that faces up.
+        let lvl = portal_level((10.0, 5.0, 0.0), (20.0, 2.0, FRAC_PI_2));
+        let mut g = Game::new(&lvl);
+        run(&mut g, 90);
+        let pig = fly(&mut g, V2::new(9.0, 5.0), V2::new(15.0, 0.0));
+        run(&mut g, 6);
+        let e = &g.ents[pig];
+        assert!(
+            (e.pos - V2::new(20.0, 2.0)).length() < 1.0,
+            "came out at {:?}",
+            e.pos
+        );
+        assert!(e.vel.y > 13.0 && e.vel.x.abs() < 2.0, "heading {:?}", e.vel);
+        assert!(g.events.iter().any(|e| matches!(e, Event::Warp { .. })));
+    }
+
+    #[test]
+    fn missing_the_opening_doesnt_warp() {
+        let lvl = portal_level((10.0, 5.0, 0.0), (20.0, 2.0, FRAC_PI_2));
+        let mut g = Game::new(&lvl);
+        run(&mut g, 90);
+        // Well above the oval.
+        let pig = fly(&mut g, V2::new(9.0, 7.5), V2::new(15.0, 0.0));
+        run(&mut g, 6);
+        assert!(g.ents[pig].pos.x > 10.0 && g.ents[pig].pos.x < 12.0);
+    }
+
+    #[test]
+    fn stacked_portals_cant_loop_forever() {
+        // Fall into the lower one, come out of the upper one, fall again...
+        let lvl = portal_level((10.0, 3.0, FRAC_PI_2), (10.0, 9.0, FRAC_PI_2));
+        let mut g = Game::new(&lvl);
+        run(&mut g, 90);
+        let pig = fly(&mut g, V2::new(10.0, 5.0), V2::ZERO);
+        run(&mut g, 60 * 30);
+        assert_eq!(g.ents[pig].warps, MAX_WARPS);
+        assert!(!matches!(g.phase, Phase::Flying { .. }), "still falling");
     }
 
     /// Throws a pig at a TNT crate of this size; did it go off?

@@ -31,6 +31,24 @@ pub fn mix(a: Color, b: Color, t: f32) -> Color {
     )
 }
 
+/// A color from its place on the color wheel (degrees), saturation and
+/// brightness (both 0..1).
+pub fn hsv(hue: f32, sat: f32, val: f32) -> Color {
+    let h = hue.rem_euclid(360.0) / 60.0;
+    let c = val * sat;
+    let x = c * (1.0 - (h % 2.0 - 1.0).abs());
+    let (r, g, b) = match count(h, 5) {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = val - c;
+    Color::new(r + m, g + m, b + m, 1.0)
+}
+
 pub fn alpha(c: Color, a: f32) -> Color {
     Color::new(c.r, c.g, c.b, c.a * a)
 }
@@ -177,7 +195,7 @@ impl Rig {
         );
     }
 
-    fn ellipse_ring(cx: f32, cy: f32, rx: f32, ry: f32, rot: f32) -> Vec<P> {
+    pub fn ellipse_ring(cx: f32, cy: f32, rx: f32, ry: f32, rot: f32) -> Vec<P> {
         let (s, c) = rot.sin_cos();
         (0..28)
             .map(|i| {

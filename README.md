@@ -29,9 +29,12 @@ procedurally, so there are no asset files.
 - **Fairies**: hover in mid-air holding up whatever rests on them, so structures can
   float. Hit one (with a pig, flying debris or a blast) and she flies away, dropping
   everything she was holding.
+- **Portals**: come in colored pairs. Anything that flies, falls or rolls into one end
+  comes out of the other at the same speed, turned to match the way the far end faces.
+  Pieces too big for the opening bump into its rim instead.
 - **Combos**: knock out several wolves within 1.5 s of each other for a DOUBLE / TRIPLE / MEGA KO bonus.
 
-13 levels, from "Straw Hut" to "Big Bad Boss" and "Fairy Lift".
+14 levels, from "Straw Hut" to "Big Bad Boss", "Fairy Lift" and "Portal Party".
 
 **Easter egg:** on US Thanksgiving the game becomes *Peckish Pilgrims*: pilgrim-hatted
 pigs, turkeys instead of wolves, cherubs instead of fairies and autumn trees
@@ -151,7 +154,7 @@ Not yet built or tested on devices. These are the standard macroquad routes:
 ## Layout
 
 - `src/sim.rs`: physics world, damage model (impact Δv), pig powers, turn flow. No rendering, so it's unit-testable.
-- `src/levels.rs`: level builder helpers (`frame`, `post`, `plank`, `hill`, `ramp`, `tnt`, `boulder`, ...) and the 13 levels.
+- `src/levels.rs`: level builder helpers (`frame`, `post`, `plank`, `hill`, `ramp`, `tnt`, `boulder`, ...) and the 14 levels.
 - `src/gfx.rs`: vector toolkit: a posable "rig" (rotation + squash/stretch) and shaded, outlined mesh primitives.
 - `src/art.rs`: the animated characters. Pigs and wolves have moods (idle, aim, yell, dizzy, cheer / smug, worried, hurt, laugh), blinking, gaze tracking and squash-and-stretch.
 - `src/render.rs`: scenery, material-shaded blocks, sling, HUD helpers.
