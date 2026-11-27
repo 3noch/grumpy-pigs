@@ -151,7 +151,7 @@ impl Editor {
             saved,
             center: None,
             zoom: 1.0,
-            next_hue: 0,
+            next_hue: UNPICKED,
         };
         ed.rebuild(true);
         ed
@@ -199,7 +199,11 @@ impl Editor {
 
     fn rebuild(&mut self, check_wobble: bool) {
         self.preview = Game::new(&self.level);
-        self.next_hue = fresh_hue(&self.level);
+        // Keep the palette's portal color steady (rebuild runs on every drag
+        // step); pick a new one only once a pair on the level has taken it.
+        if self.next_hue == UNPICKED || hue_taken(&self.level, self.next_hue) {
+            self.next_hue = fresh_hue(&self.level);
+        }
         if check_wobble {
             self.wobbly = wobbly_pieces(&self.level);
         }
@@ -283,6 +287,17 @@ fn shift_exit(p: &mut Piece, d: V2) {
         link.x += d.x;
         link.y += d.y;
     }
+}
+
+/// `next_hue` before the first pick (not a real hue: hues are below 360).
+const UNPICKED: u16 = u16::MAX;
+
+/// Whether a portal pair on the level already has this color.
+fn hue_taken(level: &Level, hue: u16) -> bool {
+    level
+        .pieces
+        .iter()
+        .any(|p| matches!(p.kind, PieceKind::Portal(link) if link.hue == hue))
 }
 
 /// A color for a new portal pair: as far round the color wheel as possible
@@ -1674,6 +1689,23 @@ mod tests {
                 assert!(d.min(360 - d) >= 90, "{hues:?}");
             }
         }
+    }
+
+    #[test]
+    fn next_portal_color_holds_still_while_dragging() {
+        let mut level = Level::default();
+        level.pieces.push(block(10.0, 0.2, 2.0, 0.4));
+        let mut ed = Editor::open(level, None, "");
+        let hue = ed.next_hue;
+        for step in 0..30 {
+            ed.level.pieces[0].x = 10.0 + step as f32 * 0.1;
+            ed.rebuild(false);
+            assert_eq!(ed.next_hue, hue);
+        }
+        // Once a pair takes that color, the next one gets another.
+        ed.level.pieces.push(new_portal(hue));
+        ed.rebuild(true);
+        assert_ne!(ed.next_hue, hue);
     }
 
     #[test]
